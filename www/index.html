@@ -2103,14 +2103,14 @@ window.importFromPastedText = async function(){
 
 
 /* ==========================================================================
-   TAB 6: KINGBOLEN ELM327 BLUETOOTH OBD2 ENGINE (JDM TOYOTA BELTA MODE 21 + 01)
+   TAB 6: KINGBOLEN ELM327 BLUETOOTH OBD2 ENGINE (2006 BELTA 1KR-FE MODE 21)
    ========================================================================== */
 var OBD = {
   connected: false,
   deviceAddr: lsGet("ctl_obd_addr") || "",
   devices: [],
   protocol: lsGet("ctl_obd_proto") || "ATSP6",
-  useToyotaMode21: false,
+  m21Variant: "DIRECT", // "DIRECT" (210C/2105/210B/210D) or "BLOCK2103" (6103/6104) or "MODE01"
   pollTimer: null,
   polling: false,
   rpm: 0,
@@ -2127,7 +2127,7 @@ var OBD = {
   avgKmL: null,
   kmLSamples: [],
   dtcs: [],
-  logs: ["Ready. Close Car Scanner Pro completely, then tap Connect ELM327."],
+  logs: ["Ready. Tap Connect ELM327 while ignition/engine is ON."],
   fullTrace: [],
   tripActive: false,
   tripStartDep: "",
@@ -2139,7 +2139,7 @@ function obdLog(msg){
   var line = "[" + new Date().toISOString().slice(11,23) + "] " + msg;
   OBD.logs.unshift(line);
   OBD.fullTrace.push(line);
-  if(OBD.logs.length > 45) OBD.logs.pop();
+  if(OBD.logs.length > 50) OBD.logs.pop();
   var box = $("#obd-term-box");
   if(box) box.innerHTML = OBD.logs.map(esc).join("<br>");
 }
@@ -2147,9 +2147,8 @@ function obdLog(msg){
 window.obdDownloadTraceLog = async function(){
   var header = "=== CAR-TECH-LOG OBD2 DIAGNOSTIC TRACE ===\n" +
                "Date: " + new Date().toString() + "\n" +
-               "Vehicle: Toyota Belta 1.0L (1KR-FE)\n" +
-               "Selected Protocol: " + OBD.protocol + "\n" +
-               "Toyota Mode 21 Active: " + OBD.useToyotaMode21 + "\n" +
+               "Vehicle: 2006 Toyota Belta 1.0L (1KR-FE)\n" +
+               "Protocol: " + OBD.protocol + " | Variant: " + OBD.m21Variant + "\n" +
                "Device Address: " + (OBD.deviceAddr || "None") + "\n" +
                "Connected: " + OBD.connected + "\n" +
                "==========================================\n\n";
@@ -2193,20 +2192,10 @@ window.obdChangeProtocol = function(newProto){
   OBD.protocol = newProto;
   lsSet("ctl_obd_proto", newProto);
   obdLog("Protocol selected: " + newProto);
-  if(OBD.connected && window.AndroidOBD){
-    OBD.polling = true;
-    try {
-      obdLog("Applying " + newProto + " => " + window.AndroidOBD.sendCommand(newProto, 800));
-      obdLog("Setting Header 7E0 => " + window.AndroidOBD.sendCommand("ATSH7E0", 500));
-      obdLog("Probe 2101 => " + window.AndroidOBD.sendCommand("2101", 1500));
-    } finally {
-      OBD.polling = false;
-    }
-  }
 };
 
 function extractPidBytes(resp, expectedMode, expectedPid){
-  if(!resp) return null;
+  if(!resp || /7F21|7F01|NO DATA|UNABLE|ERROR/i.test(resp)) return null;
   var clean = resp.replace(/[^0-9A-Fa-f]/g, "").toUpperCase();
   var target = expectedMode.toUpperCase() + expectedPid.toUpperCase();
   var idx = clean.indexOf(target);
@@ -2219,30 +2208,16 @@ function extractPidBytes(resp, expectedMode, expectedPid){
   return out;
 }
 
-// Parse JDM Toyota Mode 2101 Enhanced Data Stream (61 01 A B C D E F G H I J K ...)
-function parseToyotaMode2101(resp){
-  var b = extractPidBytes(resp, "61", "01");
-  if(!b || b.length < 10) return false;
-  // Standard Toyota JDM CAN/KWP 2101 byte layout (after 61 01):
-  // b[2]=A: Calc Load (A*100/255)
-  // b[3]=B: Coolant Temp (B - 40)
-  // b[4]=C: Short Fuel Trim ((C-128)*100/128)
-  // b[5]=D: Long Fuel Trim ((D-128)*100/128)
-  // b[6]=E: Intake Manifold Pressure MAP (E kPa)
-  // b[7]=F: Engine RPM ((F*256 + G)/4)
-  // b[8]=G: Engine RPM low byte
-  // b[9]=H: Vehicle Speed (H km/h)
-  // b[10]=I: Ignition Timing Advance (I/2 - 64)
-  // b[11]=J: Intake Air Temp (J - 40)
-  // b[12]=K: MAF or Throttle Position
-  if(b.length > 2) OBD.load = Math.round(b[2] * 100 / 255);
-  if(b.length > 3) OBD.coolant = b[3] - 40;
-  if(b.length > 4) OBD.stft = ((b[4] - 128) * 100.0 / 128.0).toFixed(1);
-  if(b.length > 5) OBD.ltft = ((b[5] - 128) * 100.0 / 128.0).toFixed(1);
-  if(b.length > 6) OBD.mapKpa = b[6];
-  if(b.length > 8) OBD.rpm = Math.round(((b[7] * 256) + b[8]) / 4);
-  if(b.length > 9) OBD.speed = b[9];
-  if(b.length > 11) OBD.iat = b[11] - 40;
+// Parse Toyota Mode 2103 multi-sensor block if returned (length >= 8 bytes)
+function parseToyotaBlock2103(resp){
+  var b = extractPidBytes(resp, "61", "03");
+  if(!b || b.length < 7) return false;
+  // Toyota JDM 2103 layout: b[2]=Coolant(A-40), b[3]=IAT(B-40), b[4]=MAP(C kPa), b[5..6]=RPM((D*256+E)/4), b[7]=Speed
+  if(b.length > 2) OBD.coolant = b[2] - 40;
+  if(b.length > 3) OBD.iat = b[3] - 40;
+  if(b.length > 4) OBD.mapKpa = b[4];
+  if(b.length > 6) OBD.rpm = Math.round(((b[5] * 256) + b[6]) / 4);
+  if(b.length > 7) OBD.speed = b[7];
   return true;
 }
 
@@ -2294,11 +2269,10 @@ window.obdConnect = async function(silentAuto){
     }
 
     OBD.connected = true;
-    OBD.useToyotaMode21 = false;
     renderObdPage();
 
     var initCmds = [
-      ["ATZ", 1600],
+      ["ATZ", 1500],
       ["ATE0", 400],
       ["ATL0", 400],
       ["ATS0", 400],
@@ -2313,28 +2287,30 @@ window.obdConnect = async function(silentAuto){
       obdLog(initCmds[i][0] + " => " + (r || "OK"));
     }
 
-    // 1. Test standard Mode 01 (0100)
-    var p0100 = window.AndroidOBD.sendCommand("0100", 1500);
-    obdLog("Probe 0100 => " + (p0100 || "EMPTY"));
+    // Discovery probe across Toyota Mode 21 PIDs to auto-lock exact 2006 Belta PID map!
+    var probeList = ["2101", "2102", "2103", "2104", "2105", "2106", "210B", "210C", "210D", "210F", "2110", "2120"];
+    var probeResults = {};
+    for(var p=0; p<probeList.length; p++){
+      var cmd = probeList[p];
+      var resp = window.AndroidOBD.sendCommand(cmd, 500);
+      probeResults[cmd] = resp;
+      obdLog("PID " + cmd + " => " + (resp || "EMPTY"));
+    }
 
-    // 2. Test JDM Toyota Enhanced Mode 21 (2101) — solves 7F0111 on JDM Toyota Belta!
-    var p2101 = window.AndroidOBD.sendCommand("2101", 1500);
-    obdLog("Toyota Probe 2101 => " + (p2101 || "EMPTY"));
-    if(extractPidBytes(p2101, "61", "01")){
-      OBD.useToyotaMode21 = true;
-      parseToyotaMode2101(p2101);
-      obdLog("✅ JDM Toyota Mode 2101 ACTIVE!");
-    } else if(!extractPidBytes(p0100, "41", "00")) {
-      // Try clearing CAN receive filter & testing Mode 21 / 01 on broadcast
-      obdLog("Trying ATAR + 2101 / 0100...");
-      window.AndroidOBD.sendCommand("ATAR", 400);
-      var p2101b = window.AndroidOBD.sendCommand("2101", 1500);
-      obdLog("Broadcast 2101 => " + (p2101b || "EMPTY"));
-      if(extractPidBytes(p2101b, "61", "01")){
-        OBD.useToyotaMode21 = true;
-        parseToyotaMode2101(p2101b);
-        obdLog("✅ JDM Toyota Mode 2101 ACTIVE!");
-      }
+    // Determine exact PID variant supported by this 2006 Belta ECU
+    var b210C = extractPidBytes(probeResults["210C"], "61", "0C");
+    var b2103 = extractPidBytes(probeResults["2103"], "61", "03");
+    if(b210C && b210C.length >= 4){
+      OBD.m21Variant = "DIRECT";
+      OBD.rpm = Math.round(((b210C[2] * 256) + b210C[3]) / 4);
+      obdLog("✅ Locked Toyota Mode 21 Direct PIDs (210C/2105/210B)!");
+    } else if(b2103 && b2103.length >= 7){
+      OBD.m21Variant = "BLOCK2103";
+      parseToyotaBlock2103(probeResults["2103"]);
+      obdLog("✅ Locked Toyota Mode 2103 Multi-Block!");
+    } else {
+      OBD.m21Variant = "SCAN_21";
+      obdLog("Scanning extended Mode 21 PIDs...");
     }
 
     var vResp = window.AndroidOBD.sendCommand("ATRV", 500);
@@ -2344,7 +2320,7 @@ window.obdConnect = async function(silentAuto){
 
     obdScanDtcsInternal();
     renderObdPage();
-    toast("✅ Connected (" + (OBD.useToyotaMode21 ? "Toyota Mode 21" : OBD.protocol) + ")");
+    toast("✅ Connected (" + OBD.m21Variant + ")");
   } finally {
     OBD.polling = false;
   }
@@ -2389,27 +2365,30 @@ function obdPollTick(){
   }
   OBD.polling = true;
   try {
-    if(OBD.useToyotaMode21){
-      // Single fast burst query `2101` fetches RPM, Speed, Coolant, MAP, IAT, STFT, LTFT, Load!
-      var r2101 = window.AndroidOBD.sendCommand("2101", 500);
-      parseToyotaMode2101(r2101);
+    if(OBD.m21Variant === "BLOCK2103"){
+      parseToyotaBlock2103(window.AndroidOBD.sendCommand("2103", 450));
+      var b2104 = extractPidBytes(window.AndroidOBD.sendCommand("2104", 450), "61", "04");
+      if(b2104 && b2104.length >= 4){
+        OBD.stft = ((b2104[3] - 128) * 100.0 / 128.0).toFixed(1);
+      }
     } else {
-      var bRpm = extractPidBytes(window.AndroidOBD.sendCommand("010C", 350), "41", "0C");
+      // Toyota Enhanced Mode 21 Direct PIDs (mirrors SAE PIDs under service 0x21)
+      var bRpm = extractPidBytes(window.AndroidOBD.sendCommand("210C", 350), "61", "0C");
       if(bRpm && bRpm.length >= 4) OBD.rpm = Math.round(((bRpm[2] * 256) + bRpm[3]) / 4);
 
-      var bSpd = extractPidBytes(window.AndroidOBD.sendCommand("010D", 350), "41", "0D");
+      var bSpd = extractPidBytes(window.AndroidOBD.sendCommand("210D", 350), "61", "0D");
       if(bSpd && bSpd.length >= 3) OBD.speed = bSpd[2];
 
-      var bTmp = extractPidBytes(window.AndroidOBD.sendCommand("0105", 350), "41", "05");
+      var bTmp = extractPidBytes(window.AndroidOBD.sendCommand("2105", 350), "61", "05");
       if(bTmp && bTmp.length >= 3) OBD.coolant = bTmp[2] - 40;
 
-      var bMap = extractPidBytes(window.AndroidOBD.sendCommand("010B", 350), "41", "0B");
+      var bMap = extractPidBytes(window.AndroidOBD.sendCommand("210B", 350), "61", "0B");
       if(bMap && bMap.length >= 3) OBD.mapKpa = bMap[2];
 
-      var bIat = extractPidBytes(window.AndroidOBD.sendCommand("010F", 300), "41", "0F");
+      var bIat = extractPidBytes(window.AndroidOBD.sendCommand("210F", 300), "61", "0F");
       if(bIat && bIat.length >= 3) OBD.iat = bIat[2] - 40;
 
-      var bStft = extractPidBytes(window.AndroidOBD.sendCommand("0106", 300), "41", "06");
+      var bStft = extractPidBytes(window.AndroidOBD.sendCommand("2106", 300), "61", "06");
       if(bStft && bStft.length >= 3) OBD.stft = ((bStft[2] - 128) * 100.0 / 128.0).toFixed(1);
     }
 
@@ -2432,9 +2411,9 @@ function obdPollTick(){
 
 function obdScanDtcsInternal(){
   if(!OBD.connected || !window.AndroidOBD) return;
-  obdLog("Scanning ECU Fault Codes (Mode 03, 07 & Toyota 13)...");
+  obdLog("Scanning ECU Fault Codes (Toyota Mode 13 & 07)...");
   var found = [];
-  [["03", "43"], ["07", "47"], ["13", "53"]].forEach(function(pair){
+  [["13", "53"], ["07", "47"], ["03", "43"]].forEach(function(pair){
     var mode = pair[0], posHeader = pair[1];
     var raw = window.AndroidOBD.sendCommand(mode, 900);
     obdLog("Mode " + mode + " => " + (raw || "EMPTY"));
@@ -2468,12 +2447,12 @@ window.obdScanDtcs = function(){
 
 window.obdClearDtcs = function(){
   if(!OBD.connected || !window.AndroidOBD) return;
-  if(!confirm("Clear Check Engine Light & ECU Fault Codes (Mode 04 / 14)?")) return;
+  if(!confirm("Clear Check Engine Light & ECU Fault Codes (Mode 14 / 04)?")) return;
   OBD.polling = true;
   try {
-    var r1 = window.AndroidOBD.sendCommand("04", 900);
-    var r2 = window.AndroidOBD.sendCommand("14", 900);
-    obdLog("Clear Codes (04/14) => " + r1 + " / " + r2);
+    var r1 = window.AndroidOBD.sendCommand("14", 900);
+    var r2 = window.AndroidOBD.sendCommand("04", 900);
+    obdLog("Clear Codes (14/04) => " + r1 + " / " + r2);
     OBD.dtcs = [];
   } finally {
     OBD.polling = false;
@@ -2578,7 +2557,7 @@ function renderObdPage(){
 
   var h = '<div class="band ' + (OBD.connected ? 'ok' : 'range') + '">'+
     '<div><div class="lbl">Kingbolen ELM327 Telemetry</div><div class="big">' + (OBD.connected ? 'ECU ONLINE' : 'STANDBY') + '</div></div>'+
-    '<div class="odo"><b>' + (OBD.volt ? OBD.volt.toFixed(1) + ' V' : '12V OBDII') + '</b><span>' + (OBD.useToyotaMode21 ? 'Toyota Mode 21' : esc(OBD.protocol)) + '</span></div>'+
+    '<div class="odo"><b>' + (OBD.volt ? OBD.volt.toFixed(1) + ' V' : '12V OBDII') + '</b><span>Mode 21 (' + esc(OBD.m21Variant) + ')</span></div>'+
   '</div>';
 
   h += '<div class="card form">'+
