@@ -2635,7 +2635,7 @@ function renderObdPage(){
     h += '<div class="list">' + OBD.dtcs.map(function(code){
       return '<div class="alert bad" style="justify-content:space-between">'+
         '<span><b>'+esc(code)+'</b> — Active / Pending Engine Fault</span>'+
-        '<button class="btn small primary" type="button" onclick="obdLogDtcToRepairs(''+esc(code)+'')">+ Auto-Add to Repairs</button>'+
+        '<button class="btn small primary" type="button" onclick="obdLogDtcToRepairs(\''+esc(code)+'\')">+ Auto-Add to Repairs</button>'+
       '</div>';
     }).join("") + '</div>';
   } else {
