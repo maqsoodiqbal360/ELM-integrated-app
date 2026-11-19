@@ -2279,7 +2279,13 @@ function stepDeskSimulator(){
   updateObdLiveDom();
 }
 
+
+function isRealElmConnected(){
+  return !!(OBD.connected && !OBD.simMode);
+}
+
 window.obdStartSimulator = function(profile){
+  if (isRealElmConnected()) { toast('ELM327 connected — Simulator locked'); return; }
   if(OBD.pollTimer){ clearInterval(OBD.pollTimer); OBD.pollTimer = null; }
   if(window.AndroidOBD){ try { window.AndroidOBD.disconnect(); } catch(e){} }
   OBD.connected = true;
@@ -2306,6 +2312,7 @@ window.obdStartSimulator = function(profile){
 };
 
 window.setSimControl = function(key, val){
+  if (isRealElmConnected()) { toast('ELM327 connected — Simulator locked'); return; }
   OBD.simMode = true;
   OBD.connected = true;
   if(key === "throttle") OBD.simThrottle = parseInt(val, 10) || 0;
@@ -2503,6 +2510,88 @@ window.obdDisconnect = function(){
   if(S.tab === "cluster") renderClusterPage();
 };
 
+
+/* ==========================================================================
+   V16: EXTENDED MODE 21 PID FETCHER, ENGINEERING FORMULAS & SMART ALERTS
+   ========================================================================== */
+function applyExtraMode21Pids(){
+  if (!OBD.connected || OBD.simMode || !window.AndroidOBD) return;
+  // Fetch Long Fuel Trim (2107), Throttle Position (2111), and extra block (2110) if available
+  var bLtft = extractPidBytes(window.AndroidOBD.sendCommand("2107", 300), "61", "07");
+  if (bLtft && bLtft.length >= 3) {
+    OBD.ltft = ((bLtft[2] - 128) * 100.0 / 128.0).toFixed(1);
+  }
+  var bTps = extractPidBytes(window.AndroidOBD.sendCommand("2111", 300), "61", "11");
+  if (bTps && bTps.length >= 3) {
+    OBD.throttle = Math.round((bTps[2] * 100.0) / 255.0);
+  }
+  var b2110 = extractPidBytes(window.AndroidOBD.sendCommand("2110", 300), "61", "10");
+  if (b2110 && b2110.length >= 4 && OBD.load == null) {
+    OBD.load = Math.round((b2110[2] * 100.0) / 255.0);
+  }
+}
+
+function computeDerivedTelemetryFormulas(){
+  var stftNum = OBD.stft != null ? parseFloat(OBD.stft) : null;
+  var ltftNum = OBD.ltft != null ? parseFloat(OBD.ltft) : null;
+  var totalTrim = null;
+  if (stftNum != null && ltftNum != null) {
+    totalTrim = +(stftNum + ltftNum).toFixed(1);
+  } else if (stftNum != null) {
+    totalTrim = +stftNum.toFixed(1);
+  }
+
+  var mafEstGs = null;
+  var lph = null;
+  if ((OBD.rpm || 0) > 0 && (OBD.mapKpa || 0) > 0) {
+    var tempK = ((OBD.iat != null ? OBD.iat : 32) + 273.15);
+    var imap = (OBD.rpm * OBD.mapKpa) / (tempK * 2.0);
+    mafEstGs = +(((imap / 60.0) * 0.82 * 0.998 * 28.97) / 8.314).toFixed(2);
+    lph = +(mafEstGs * 0.3287).toFixed(2);
+  }
+
+  var estLoad = OBD.load;
+  if (estLoad == null && (OBD.mapKpa || 0) > 0) {
+    // 1KR-FE atmospheric/manifold load ratio approx relative to 101 kPa sea-level ref
+    estLoad = Math.min(100, Math.max(5, Math.round((OBD.mapKpa / 101.0) * 100)));
+  }
+
+  var thermalState = "STANDBY";
+  if (OBD.coolant != null) {
+    if (OBD.coolant >= CLUSTER_CFG.tempLimit) thermalState = "OVERHEAT";
+    else if (OBD.coolant >= 95) thermalState = "WARM_HIGH";
+    else if (OBD.coolant < 75 && (OBD.rpm || 0) > 600) thermalState = "COLD_WARMUP";
+    else thermalState = "NORMAL";
+  }
+
+  var chargingState = "UNKNOWN";
+  if (OBD.volt != null && OBD.volt > 0) {
+    if ((OBD.rpm || 0) > 600) {
+      if (OBD.volt < 13.2) chargingState = "UNDERCHARGE";
+      else if (OBD.volt > 14.7) chargingState = "OVERCHARGE";
+      else chargingState = "CHARGING_OK";
+    } else {
+      if (OBD.volt < 12.1) chargingState = "LOW_BATT";
+      else chargingState = "BATT_OK";
+    }
+  }
+
+  var vacuumLeakSuspect = false;
+  if ((OBD.rpm || 0) > 0 && (OBD.rpm || 0) < 950 && (OBD.speed || 0) < 5 && (OBD.mapKpa || 0) > 52) {
+    vacuumLeakSuspect = true;
+  }
+
+  return {
+    totalTrim: totalTrim,
+    mafEstGs: mafEstGs,
+    lph: lph,
+    estLoad: estLoad,
+    thermalState: thermalState,
+    chargingState: chargingState,
+    vacuumLeakSuspect: vacuumLeakSuspect
+  };
+}
+
 function evaluateBeltaHealth(){
   var stftVal = OBD.stft != null ? parseFloat(OBD.stft) : null;
   var rpm = OBD.rpm || 0;
@@ -2534,14 +2623,60 @@ function evaluateBeltaHealth(){
   var battHigh = (volt != null && volt > 14.8);
   var dtcAlert = (OBD.dtcs && OBD.dtcs.length > 0);
 
+  var fx = computeDerivedTelemetryFormulas();
+  var severeFromFormulas = false;
+
   var alerts = [];
   if(speedAlert) alerts.push({ type: "warn", text: "🚨 SPEED LIMIT ALERT: " + speed + " km/h (Limit: " + CLUSTER_CFG.speedLimit + " km/h)" });
-  if(tempAlert) alerts.push({ type: "bad", text: "🌡️ OVERHEAT ALERT: Coolant at " + coolant + "°C (Limit: " + CLUSTER_CFG.tempLimit + "°C)" });
-  if(misfireLevel === "ALERT") alerts.push({ type: "bad", text: misfireTitle + " — " + misfireDetail });
-  else if(misfireLevel === "WARN") alerts.push({ type: "warn", text: misfireTitle });
-  if(battLow) alerts.push({ type: "warn", text: "🔋 LOW VOLTAGE: " + volt.toFixed(1) + "V" });
-  if(battHigh) alerts.push({ type: "bad", text: "⚡ HIGH VOLTAGE: " + volt.toFixed(1) + "V" });
-  if(dtcAlert) alerts.push({ type: "bad", text: "🛑 DTC ACTIVE: " + OBD.dtcs.join(", ") });
+  if(tempAlert) {
+    severeFromFormulas = true;
+    alerts.push({ type: "bad", text: "🌡️ OVERHEAT ALERT: Coolant at " + coolant + "°C (Limit: " + CLUSTER_CFG.tempLimit + "°C)" });
+  } else if (fx.thermalState === "WARM_HIGH") {
+    alerts.push({ type: "warn", text: "🌡️ Thermal Watch: Coolant at " + coolant + "°C (Approaching " + CLUSTER_CFG.tempLimit + "°C limit)" });
+  }
+
+  if(misfireLevel === "ALERT") {
+    severeFromFormulas = true;
+    alerts.push({ type: "bad", text: misfireTitle + " — " + misfireDetail });
+  } else if(misfireLevel === "WARN") {
+    alerts.push({ type: "warn", text: misfireTitle });
+  }
+
+  if(fx.totalTrim != null && Math.abs(fx.totalTrim) >= 15) {
+    severeFromFormulas = true;
+    alerts.push({ type: "bad", text: "🧪 Total Fuel Trim Critical (" + (fx.totalTrim>0?"+":"") + fx.totalTrim + "%): Mixture compensation at limit" });
+  } else if(fx.totalTrim != null && Math.abs(fx.totalTrim) >= 8) {
+    alerts.push({ type: "warn", text: "🧪 Total Fuel Trim Drift (" + (fx.totalTrim>0?"+":"") + fx.totalTrim + "%): Monitor STFT/LTFT" });
+  }
+
+  if(fx.vacuumLeakSuspect) {
+    alerts.push({ type: "warn", text: "💨 High Manifold Vacuum / Leak Watch: MAP " + (OBD.mapKpa || "--") + " kPa at idle/low speed" });
+  }
+
+  if(fx.chargingState === "UNDERCHARGE") {
+    alerts.push({ type: "warn", text: "🔌 Alternator Output Low (" + volt.toFixed(1) + "V while running): Check belt / charging" });
+  } else if(fx.chargingState === "OVERCHARGE") {
+    severeFromFormulas = true;
+    alerts.push({ type: "bad", text: "⚡ Alternator Overcharge (" + volt.toFixed(1) + "V): Check voltage regulator" });
+  } else if(fx.chargingState === "LOW_BATT") {
+    alerts.push({ type: "warn", text: "🔋 Low Battery Voltage (" + volt.toFixed(1) + "V): Weak battery state" });
+  }
+
+  if((OBD.rpm || 0) >= 5800) {
+    severeFromFormulas = true;
+    alerts.push({ type: "bad", text: "🔥 HIGH RPM REDLINE: Engine at " + OBD.rpm + " RPM" });
+  } else if((OBD.rpm || 0) >= 4800) {
+    alerts.push({ type: "warn", text: "⚡ High RPM Zone: Engine at " + OBD.rpm + " RPM" });
+  }
+
+  if(fx.lph != null && fx.lph >= 14.5) {
+    alerts.push({ type: "warn", text: "⛽ High Burn Rate: Est. " + fx.lph.toFixed(1) + " L/h fuel flow" });
+  }
+
+  if(dtcAlert) {
+    severeFromFormulas = true;
+    alerts.push({ type: "bad", text: "🛑 DTC ACTIVE: " + OBD.dtcs.join(", ") });
+  }
 
   return {
     misfireLevel: misfireLevel,
@@ -2552,6 +2687,8 @@ function evaluateBeltaHealth(){
     battLow: battLow,
     battHigh: battHigh,
     dtcAlert: dtcAlert,
+    severeAny: severeFromFormulas,
+    formulas: fx,
     alerts: alerts
   };
 }
@@ -2572,8 +2709,9 @@ window.updateClusterThresholds = function(){
 };
 
 function syncClusterLiveDom(){
-  if(S.tab !== "cluster") return;
   var h = evaluateBeltaHealth();
+  checkSevereAlertsAndBeep(h);
+  if(S.tab !== "cluster") return;
   var elSpd = $("#cl-spd"), elRpm = $("#cl-rpm"), elTmp = $("#cl-tmp"), elAvg = $("#cl-avg"), elVlt = $("#cl-vlt"), elMap = $("#cl-map"), elTps = $("#cl-tps"), elIat = $("#cl-iat"), elStft = $("#cl-stft");
   var barSpd = $("#cl-spd-bar"), barRpm = $("#cl-rpm-bar");
   if(elSpd){
@@ -2646,6 +2784,11 @@ function renderClusterPage(){
       '</div>' +
     '</div>' +
 
+    '<div class="thar-mid-panel" style="grid-template-columns:repeat(3,minmax(0,1fr))">' +
+      '<div><span>TRIM TOT</span><b>' + (h.formulas.totalTrim != null ? ((h.formulas.totalTrim>0?"+":"") + h.formulas.totalTrim + '%') : '--') + '</b></div>' +
+      '<div><span>FUEL FLOW</span><b>' + (h.formulas.lph != null ? (h.formulas.lph.toFixed(1) + ' L/h') : '--') + '</b></div>' +
+      '<div><span>LOAD / CHG</span><b>' + (h.formulas.estLoad != null ? (h.formulas.estLoad + '% • ' + h.formulas.chargingState.replace('_',' ')) : '--') + '</b></div>' +
+    '</div>' +
     '<div class="thar-mid-panel">' +
       '<div><span>COOLANT</span><b id="cl-tmp" style="color:' + (h.tempAlert ? 'var(--bad)' : 'var(--ink)') + '">' + (OBD.coolant != null ? OBD.coolant + '°C' : '--') + '</b></div>' +
       '<div><span>ECONOMY</span><b id="cl-avg" style="color:var(--good)">' + (OBD.avgKmL != null ? OBD.avgKmL.toFixed(1) + ' km/L' : '--') + '</b></div>' +
@@ -2665,7 +2808,7 @@ function renderClusterPage(){
     '</div>' +
   '</div>';
 
-  // Direct functional simulator & pedal deck inside Cluster tab so user doesn't have to switch tabs
+  if (!isRealElmConnected()) {
   out += '<div class="card form" style="border-left:4px solid var(--accent)">' +
     '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">' +
       '<b>🎮 Cluster Simulator & Drive Controls</b>' +
@@ -2684,6 +2827,7 @@ function renderClusterPage(){
       '<button class="btn small danger" type="button" onclick="setSimControl(\'brakeHold\', !OBD.simHoldingBrake)">' + (OBD.simHoldingBrake ? '🛑 Release Brake' : '🛑 Hold Brake') + '</button>' +
     '</div>' +
   '</div>';
+  }
 
   out += '<div><h2>Active Alerts & 1KR-FE Misfire Monitor</h2><div class="list">';
   if(h.alerts.length){
@@ -2701,12 +2845,148 @@ function renderClusterPage(){
       '<label class="fld"><span>Coolant Overheat Alert (°C)</span><input type="number" id="cl-tmp-lim" value="' + CLUSTER_CFG.tempLimit + '" min="75" max="125"></label>' +
     '</div>' +
     '<div class="btns">' +
-      '<button class="btn small primary" type="button" onclick="updateClusterThresholds()">Save Alert Limits</button>' +
+      '<button class="btn small primary" type="button" onclick="updateClusterThresholds()">Save Alert Limits</button>' + '<button class="btn small" type="button" onclick="toggleAlertBeepMute()">' + (BEEP_STATE.muted ? '🔇 Beep Muted' : '🔊 Severe Beep ON') + '</button>' + '<button class="btn small" type="button" onclick="obdSaveSnapTrip()">⚡ Snap Trip</button>' +
     '</div>' +
   '</div></div>';
 
   el.innerHTML = out;
 }
+
+
+/* ==========================================================================
+   V14: SCREEN WAKE LOCK, SEVERE ALERT BEEP & SNAP TRIP LOGGER
+   ========================================================================== */
+var WAKE_LOCK = {
+  sentinel: null,
+  active: false
+};
+
+var BEEP_STATE = {
+  muted: lsGet("ctl_beep_muted") === "1",
+  lastBeepAt: 0,
+  cooldownMs: 3500
+};
+
+async function requestScreenWakeLock(){
+  try {
+    if ("wakeLock" in navigator && navigator.wakeLock && typeof navigator.wakeLock.request === "function") {
+      if (!WAKE_LOCK.sentinel || WAKE_LOCK.sentinel.released) {
+        WAKE_LOCK.sentinel = await navigator.wakeLock.request("screen");
+        WAKE_LOCK.active = true;
+        WAKE_LOCK.sentinel.addEventListener("release", function(){
+          WAKE_LOCK.active = false;
+        });
+      }
+    }
+  } catch(e) {
+    WAKE_LOCK.active = false;
+  }
+}
+
+document.addEventListener("visibilitychange", function(){
+  if (document.visibilityState === "visible") {
+    requestScreenWakeLock();
+  }
+});
+
+function playSevereBeep(){
+  if (BEEP_STATE.muted) return;
+  var now = Date.now();
+  if (now - BEEP_STATE.lastBeepAt < BEEP_STATE.cooldownMs) return;
+  BEEP_STATE.lastBeepAt = now;
+
+  try {
+    var AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return;
+    var ctx = new AudioCtx();
+    var pulses = [0, 0.18, 0.36];
+    pulses.forEach(function(offset){
+      var osc = ctx.createOscillator();
+      var gain = ctx.createGain();
+      osc.type = "triangle";
+      osc.frequency.setValueAtTime(1040, ctx.currentTime + offset);
+      gain.gain.setValueAtTime(0.001, ctx.currentTime + offset);
+      gain.gain.exponentialRampToValueAtTime(0.22, ctx.currentTime + offset + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + offset + 0.14);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(ctx.currentTime + offset);
+      osc.stop(ctx.currentTime + offset + 0.15);
+    });
+    setTimeout(function(){
+      try { ctx.close(); } catch(e){}
+    }, 900);
+  } catch(e) {}
+}
+
+window.toggleAlertBeepMute = function(){
+  BEEP_STATE.muted = !BEEP_STATE.muted;
+  lsSet("ctl_beep_muted", BEEP_STATE.muted ? "1" : "0");
+  if (!BEEP_STATE.muted) {
+    BEEP_STATE.lastBeepAt = 0;
+    playSevereBeep();
+    toast("🔊 Severe alert beep ON");
+  } else {
+    toast("🔇 Severe alert beep muted");
+  }
+  if (S.tab === "cluster") renderClusterPage();
+  if (S.tab === "obd") renderObdPage();
+};
+
+function checkSevereAlertsAndBeep(health){
+  if (!health || !OBD.connected) return;
+  var hasSevere = !!health.severeAny || (health.misfireLevel === "ALERT") || !!health.tempAlert || !!health.battHigh || !!health.dtcAlert;
+  if (hasSevere) {
+    playSevereBeep();
+  }
+}
+
+function healthHasSevereForSnap(){
+  var hh = evaluateBeltaHealth();
+  return !!(hh && (hh.misfireLevel === "ALERT" || hh.tempAlert || hh.dtcAlert));
+}
+
+window.obdSaveSnapTrip = async function(){
+  if (!db) { toast("Database not ready"); return; }
+  var dist = Math.max(1, Math.round(OBD.tripDistKm || (OBD.speed > 0 ? (OBD.speed * 0.25) : 10)));
+  var o1 = curOdo();
+  var o2 = o1 + dist;
+  var d = new Date();
+  var arrTime = pad(d.getHours()) + ":" + pad(d.getMinutes());
+  var n = S.trips.reduce(function(m,t){return Math.max(m,t.n||0)}, 0) + 1;
+  var cap = lsGet("tl_cap") || "Maqsood";
+  var parts = [];
+  if (OBD.avgKmL != null) parts.push("Avg " + OBD.avgKmL.toFixed(1) + " km/L");
+  if (OBD.coolant != null) parts.push("Coolant " + OBD.coolant + "°C");
+  if (OBD.stft != null) parts.push("STFT " + OBD.stft + "%");
+  var note = parts.length ? ("ECU Snap: " + parts.join(" • ")) : "Logged from Thar Cluster";
+
+  await db.collection("trips").add({
+    n: n,
+    date: todayISO(),
+    captain: cap,
+    co: "",
+    pax: 1,
+    from: "Current Location",
+    to: "Checkpoint",
+    via: "Cluster Snap",
+    dep: OBD.tripStartDep || arrTime,
+    arr: arrTime,
+    stopMin: 0,
+    odoOut: o1,
+    odoIn: o2,
+    dn: (d.getHours() < 6 || d.getHours() >= 18) ? "Night" : "Day",
+    weather: "Clear",
+    road: OBD.simProfile === "HIGHWAY" ? "Highway" : "Dry",
+    purpose: OBD.simProfile === "HIGHWAY" ? "Long Trip" : "Commute",
+    preCheck: "Y",
+    snagRaised: healthHasSevereForSnap() ? "Y" : "N",
+    remarks: note,
+    createdAt: Date.now()
+  });
+
+  toast("✅ Snap Trip #" + n + " (" + dist + " km) saved to Trips!");
+};
 
 function computeBeltaFuelEconomy(){
   if(OBD.rpm > 0 && OBD.mapKpa > 0){
@@ -2761,6 +3041,7 @@ function obdPollTick(){
       if(bStft && bStft.length >= 3) OBD.stft = ((bStft[2] - 128) * 100.0 / 128.0).toFixed(1);
     }
 
+    applyExtraMode21Pids();
     computeBeltaFuelEconomy();
 
     var now = Date.now();
@@ -2911,6 +3192,7 @@ window.obdFinishAndSaveTrip = async function(){
 };
 
 function updateObdLiveDom(){
+  checkSevereAlertsAndBeep(evaluateBeltaHealth());
   var elRpm = $("#og-rpm"), elSpd = $("#og-spd"), elTmp = $("#og-tmp"), elAvg = $("#og-avg"), elMap = $("#og-map"), elStft = $("#og-stft"), elDist = $("#og-trip-dist");
   if(elRpm) elRpm.textContent = OBD.rpm;
   if(elSpd) elSpd.textContent = OBD.speed;
@@ -2960,6 +3242,7 @@ function renderObdPage(){
     '</div>'+
   '</div>';
 
+  if (!isRealElmConnected()) {
   h += '<div class="card form" style="background:var(--surface-2)">' +
     '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">' +
       '<b>🧪 Drive Simulator & Pedal Controls</b>' +
@@ -2978,6 +3261,7 @@ function renderObdPage(){
       '<button class="btn small danger" type="button" onclick="setSimControl(\'brakeHold\', !OBD.simHoldingBrake)">' + (OBD.simHoldingBrake ? '🛑 Release Brake' : '🛑 Hold Brake') + '</button>' +
     '</div>' +
   '</div>';
+  }
 
   h += '<div class="gauge-grid">'+
     '<div class="gauge"><div class="gk">Engine RPM</div><div class="gv" id="og-rpm">'+OBD.rpm+'</div><div class="gs">1KR-FE Idle ~700</div></div>'+
@@ -3038,6 +3322,7 @@ function renderObdPage(){
 
 async function boot(){
   dl = true;
+  requestScreenWakeLock();
   initTripForm();
   $$(".tabs button").forEach(function(b){b.addEventListener("click",function(){go(b.dataset.tab)})});
   renderAll();
