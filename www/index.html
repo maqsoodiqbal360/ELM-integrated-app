@@ -1,0 +1,2601 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style>
+<title>Car Tech Log</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Car Tech Log">
+<meta name="theme-color" content="#141C2B">
+<link rel="apple-touch-icon" href="https://img.icons8.com/color/192/car--v1.png">
+<link rel="icon" type="image/png" href="https://img.icons8.com/color/192/car--v1.png">
+<link rel="manifest" href="data:application/manifest+json;charset=utf-8,%7B%22name%22%3A%22Car%20Tech%20Log%22%2C%22short_name%22%3A%22CarLog%22%2C%22start_url%22%3A%22.%22%2C%22display%22%3A%22standalone%22%2C%22background_color%22%3A%22%230B111C%22%2C%22theme_color%22%3A%22%23141C2B%22%2C%22icons%22%3A%5B%7B%22src%22%3A%22https%3A%2F%2Fimg.icons8.com%2Fcolor%2F192%2Fcar--v1.png%22%2C%22sizes%22%3A%22192x192%22%2C%22type%22%3A%22image%2Fpng%22%7D%5D%7D">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+
+<!-- Offline Capacitor SQLite + LocalStorage Persistence Engine -->
+<script>
+window.OfflineDB = (function(){
+  let sqlite = null;
+  let useNative = false;
+  let listeners = {};
+
+  function notify(col) {
+    if (listeners[col]) {
+      listeners[col].forEach(cb => cb());
+    }
+  }
+
+  function lsRead(col) {
+    try { return JSON.parse(localStorage.getItem("ctl_v3_" + col) || "null"); } catch(e) { return null; }
+  }
+  function lsWrite(col, data) {
+    try { localStorage.setItem("ctl_v3_" + col, JSON.stringify(data)); } catch(e) {}
+  }
+
+  async function init() {
+    try {
+      if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.CapacitorSQLite) {
+        sqlite = window.Capacitor.Plugins.CapacitorSQLite;
+        await sqlite.createConnection({ database: "car_tech_log_v3", version: 1, encrypted: false, mode: "no-encryption" });
+        await sqlite.open({ database: "car_tech_log_v3" });
+        await sqlite.execute({
+          database: "car_tech_log_v3",
+          statements: `
+            CREATE TABLE IF NOT EXISTS kv_store (
+              col TEXT NOT NULL,
+              id TEXT NOT NULL,
+              payload TEXT NOT NULL,
+              PRIMARY KEY (col, id)
+            );
+          `
+        });
+        useNative = true;
+      }
+    } catch (e) {
+      console.warn("SQLite fallback to localStorage:", e);
+      useNative = false;
+    }
+  }
+
+  async function getAll(col) {
+    if (useNative) {
+      const res = await sqlite.query({ database: "car_tech_log_v3", statement: "SELECT id, payload FROM kv_store WHERE col = ?", values: [col] });
+      return (res.values || []).map(r => {
+        const obj = JSON.parse(r.payload);
+        obj.id = r.id;
+        return obj;
+      });
+    }
+    return lsRead(col) || [];
+  }
+
+  async function putDoc(col, id, data, merge) {
+    const clean = Object.assign({}, data);
+    delete clean.id;
+    if (useNative) {
+      let finalObj = clean;
+      if (merge) {
+        const existing = await getDoc(col, id);
+        if (existing) finalObj = Object.assign({}, existing, clean);
+        delete finalObj.id;
+      }
+      await sqlite.run({
+        database: "car_tech_log_v3",
+        statement: "INSERT OR REPLACE INTO kv_store (col, id, payload) VALUES (?, ?, ?)",
+        values: [col, id, JSON.stringify(finalObj)]
+      });
+    } else {
+      if (col === "config") {
+        let cur = lsRead("config_" + id) || {};
+        lsWrite("config_" + id, merge ? Object.assign({}, cur, clean) : clean);
+      } else {
+        let arr = lsRead(col) || [];
+        const idx = arr.findIndex(x => x.id === id);
+        if (idx >= 0) {
+          arr[idx] = merge ? Object.assign({}, arr[idx], clean, { id }) : Object.assign({}, clean, { id });
+        } else {
+          arr.push(Object.assign({}, clean, { id }));
+        }
+        lsWrite(col, arr);
+      }
+    }
+    notify(col === "config" ? "config/" + id : col);
+  }
+
+  async function getDoc(col, id) {
+    if (useNative) {
+      const res = await sqlite.query({ database: "car_tech_log_v3", statement: "SELECT id, payload FROM kv_store WHERE col = ? AND id = ?", values: [col, id] });
+      if (res.values && res.values.length) {
+        const obj = JSON.parse(res.values[0].payload);
+        obj.id = res.values[0].id;
+        return obj;
+      }
+      return null;
+    }
+    if (col === "config") return lsRead("config_" + id);
+    const arr = lsRead(col) || [];
+    return arr.find(x => x.id === id) || null;
+  }
+
+  async function delDoc(col, id) {
+    if (useNative) {
+      await sqlite.run({ database: "car_tech_log_v3", statement: "DELETE FROM kv_store WHERE col = ? AND id = ?", values: [col, id] });
+    } else {
+      let arr = lsRead(col) || [];
+      arr = arr.filter(x => x.id !== id);
+      lsWrite(col, arr);
+    }
+    notify(col);
+  }
+
+  function genId() {
+    return "id_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 7);
+  }
+
+  const firestoreCompat = {
+    collection(col) {
+      return {
+        doc(id) {
+          const docId = id || genId();
+          return {
+            id: docId,
+            _col: col,
+            _id: docId,
+            async set(data, opts) { await putDoc(col, docId, data, opts && opts.merge); },
+            async update(data) { await putDoc(col, docId, data, true); },
+            async delete() { await delDoc(col, docId); }
+          };
+        },
+        async add(data) {
+          const docId = genId();
+          await putDoc(col, docId, data, false);
+          return { id: docId };
+        },
+        async get() {
+          const items = await getAll(col);
+          return {
+            empty: items.length === 0,
+            docs: items.map(item => ({
+              id: item.id,
+              data: () => Object.assign({}, item),
+              ref: { _col: col, _id: item.id }
+            }))
+          };
+        },
+        onSnapshot(cb) {
+          const emit = async () => {
+            const items = await getAll(col);
+            cb({
+              docs: items.map(item => ({
+                id: item.id,
+                data: () => Object.assign({}, item)
+              }))
+            });
+          };
+          (listeners[col] = listeners[col] || []).push(emit);
+          emit();
+        }
+      };
+    },
+    doc(path) {
+      const parts = path.split("/");
+      const col = parts[0], id = parts[1];
+      return {
+        async set(data, opts) { await putDoc(col, id, data, opts && opts.merge); },
+        async update(data) { await putDoc(col, id, data, true); },
+        async delete() { await delDoc(col, id); },
+        onSnapshot(cb) {
+          const key = col + "/" + id;
+          const emit = async () => {
+            const item = await getDoc(col, id);
+            cb({
+              exists: !!item,
+              data: () => item ? Object.assign({}, item) : {}
+            });
+          };
+          (listeners[key] = listeners[key] || []).push(emit);
+          emit();
+        }
+      };
+    },
+    batch() {
+      const ops = [];
+      return {
+        set(ref, data, opts) { ops.push(() => putDoc(ref._col || "unknown", ref._id || ref.id, data, opts && opts.merge)); },
+        delete(ref) { ops.push(() => delDoc(ref._col, ref._id)); },
+        async commit() {
+          for (const op of ops) await op();
+        }
+      };
+    },
+    isNative() { return useNative; }
+  };
+
+  return { init, db: firestoreCompat, isNative: () => useNative };
+})();
+</script>
+<!-- Tesseract OCR for Camera Receipt Scanning -->
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+
+<style>
+:root{
+  --bg:#E8ECF0; --surface:#FFFFFF; --surface-2:#F2F4F7; --ink:#121A2B; --muted:#5A6578; --line:#C9D1DC;
+  --accent:#D4470B; --accent-ink:#FFFFFF;
+  --good:#17703F; --good-bg:#DDF3E6; --warn:#8F5600; --warn-bg:#FFEFCC; --bad:#A8221A; --bad-bg:#FDE1DE;
+  --chart-fuel:#D4470B; --chart-maint:#2563EB;
+  --f-display:"Barlow Condensed","Arial Narrow",Arial,sans-serif;
+  --f-body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --f-data:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0B111C; --surface:#141C2B; --surface-2:#1B2538; --ink:#E9EDF4; --muted:#93A0B6; --line:#2A3650;
+    --accent:#FF7A3D; --accent-ink:#1B0E05;
+    --good:#52C98D; --good-bg:#12301F; --warn:#F2B14C; --warn-bg:#3A2C0E; --bad:#FF8279; --bad-bg:#40181A;
+    --chart-fuel:#FF7A3D; --chart-maint:#60A5FA;
+    color-scheme:dark;
+  }
+}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.45;
+  padding-block:0 96px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.wrap{max-width:680px;margin:0 auto}
+h1,h2,h3{font-family:var(--f-display);text-transform:uppercase;letter-spacing:.06em;margin:0;text-wrap:balance}
+.mast{display:flex;align-items:center;justify-content:space-between;gap:12px;padding-block:18px 14px}
+.mast h1{font-size:26px;font-weight:700;line-height:1}
+.mast .sub{font-size:12px;color:var(--muted);letter-spacing:.04em;margin-top:2px}
+.plate{font-family:var(--f-data);font-weight:600;font-size:15px;letter-spacing:.08em;border:2px solid var(--ink);border-radius:6px;padding:4px 10px;background:var(--surface);white-space:nowrap}
+.view{display:flex;flex-direction:column;gap:18px}
+.view[hidden]{display:none}
+h2{font-size:15px;font-weight:600;color:var(--muted);margin-bottom:8px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px}
+.band{border-radius:10px;padding:16px;display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap;border:1px solid var(--line);background:var(--surface-2)}
+.band.ok{background:var(--good-bg);color:var(--good);border-color:transparent}
+.band.nogo{background:var(--bad-bg);color:var(--bad);border-color:transparent}
+.band.highlight{background:linear-gradient(135deg, rgba(212,71,11,0.15), rgba(212,71,11,0.05));border-color:var(--accent)}
+.band.range{background:linear-gradient(135deg, rgba(37,99,235,0.12), rgba(37,99,235,0.04));border-color:#2563EB}
+.band .lbl{font-size:12px;letter-spacing:.1em;text-transform:uppercase;opacity:.85}
+.band .big{font-family:var(--f-display);font-weight:700;font-size:32px;line-height:1.05;text-transform:uppercase;letter-spacing:.04em}
+.band .odo{text-align:right}
+.band .odo b{font-family:var(--f-data);font-size:24px;font-weight:600;display:block;color:var(--ink)}
+.band .odo span{font-size:12px;color:var(--ink);opacity:.75}
+.tiles{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.tile{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:10px 12px;min-width:0}
+.tile .k{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.tile .v{font-family:var(--f-data);font-size:20px;font-weight:600;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.tile .v small{font-size:12px;color:var(--muted);font-weight:400;margin-left:3px}
+.list{display:flex;flex-direction:column;gap:8px}
+.item{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px;min-width:0}
+.item .top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
+.item .ttl{font-weight:600;overflow-wrap:anywhere}
+.item .meta{font-size:13px;color:var(--muted);margin-top:2px;overflow-wrap:anywhere}
+.item .num{font-family:var(--f-data);font-size:13px;color:var(--muted);white-space:nowrap}
+.pill{display:inline-block;font-family:var(--f-data);font-size:11px;font-weight:600;letter-spacing:.05em;padding:2px 8px;border-radius:99px;white-space:nowrap;background:var(--surface-2);color:var(--muted);border:1px solid var(--line)}
+.pill.good{background:var(--good-bg);color:var(--good);border-color:transparent}
+.pill.warn{background:var(--warn-bg);color:var(--warn);border-color:transparent}
+.pill.bad{background:var(--bad-bg);color:var(--bad);border-color:transparent}
+.pill.info{background:rgba(37,99,235,0.12);color:#2563EB;border-color:transparent}
+.alert{display:flex;gap:10px;align-items:center;padding:10px 12px;border-radius:10px;font-size:14px}
+.alert.bad{background:var(--bad-bg);color:var(--bad)}
+.alert.warn{background:var(--warn-bg);color:var(--warn)}
+.alert.good{background:var(--good-bg);color:var(--good)}
+.empty{border:1.5px dashed var(--line);border-radius:10px;padding:18px;text-align:center;color:var(--muted)}
+.empty p{margin:0 0 10px}
+.tbl-wrap{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th{font-family:var(--f-display);text-transform:uppercase;letter-spacing:.06em;font-weight:600;font-size:13px;color:var(--muted);text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:8px;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums;white-space:nowrap}
+td.n,th.n{text-align:right;font-family:var(--f-data)}
+tr:last-child td{border-bottom:0}
+
+/* Spend Bar & SVG Charts */
+.spend-bar-wrap{display:flex;flex-direction:column;gap:8px}
+.spend-bar{display:flex;height:24px;border-radius:6px;overflow:hidden;background:var(--surface-2);border:1px solid var(--line)}
+.spend-seg{display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;color:#fff;overflow:hidden;white-space:nowrap}
+.spend-fuel{background:var(--chart-fuel)}
+.spend-maint{background:var(--chart-maint)}
+.spend-legend{display:flex;gap:16px;font-size:12px;flex-wrap:wrap}
+.spend-leg-item{display:flex;align-items:center;gap:6px}
+.spend-dot{width:10px;height:10px;border-radius:3px}
+.chart-svg{width:100%;height:auto;display:block;overflow:visible}
+
+/* Filter Bar */
+.filter-bar{display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap}
+.filter-bar input,.filter-bar select{min-height:38px;padding:6px 10px;font-size:14px}
+.filter-bar input{flex:2;min-width:160px}
+.filter-bar select{flex:1;min-width:130px}
+
+/* Progress Bars for Maintenance */
+.prog-track{background:var(--surface-2);border-radius:99px;height:9px;overflow:hidden;margin-top:6px;border:1px solid var(--line)}
+.prog-fill{height:100%;border-radius:99px;transition:width .3s}
+.prog-fill.good{background:var(--good)}
+.prog-fill.warn{background:var(--warn)}
+.prog-fill.bad{background:var(--bad)}
+
+/* Quick Presets Chips */
+.presets-bar{display:flex;gap:6px;overflow-x:auto;padding-bottom:4px;margin-bottom:6px}
+.preset-chip{background:var(--surface-2);border:1px solid var(--line);border-radius:20px;padding:5px 12px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;display:flex;align-items:center;gap:4px}
+.preset-chip:hover{background:var(--surface);border-color:var(--accent);color:var(--accent)}
+
+/* OCR Scanner Box */
+.ocr-box{border:2px dashed var(--line);border-radius:8px;padding:12px;text-align:center;background:var(--surface-2);margin-bottom:8px;cursor:pointer}
+.ocr-box:hover{border-color:var(--accent)}
+.ocr-box input[type=file]{display:none}
+
+.form{display:flex;flex-direction:column;gap:14px}
+.grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.fld{display:flex;flex-direction:column;gap:4px;min-width:0}
+.fld>span,.lab{font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:500}
+input[type=text],input[type=number],input[type=date],input[type=time],select,textarea{
+  font:inherit;font-size:16px;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:8px;
+  padding:11px 12px;min-height:46px;width:100%;min-width:0;appearance:none;-webkit-appearance:none}
+input[type=number]{font-family:var(--f-data)}
+textarea{min-height:72px;resize:vertical}
+select{background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),linear-gradient(135deg,var(--muted) 50%,transparent 50%);background-position:calc(100% - 18px) 50%,calc(100% - 13px) 50%;background-size:5px 5px;background-repeat:no-repeat;padding-right:32px}
+input:focus-visible,select:focus-visible,textarea:focus-visible,button:focus-visible{outline:3px solid var(--accent);outline-offset:1px}
+.seg{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--surface)}
+.seg label{flex:1;position:relative}
+.seg input{position:absolute;opacity:0;inset:0;margin:0;cursor:pointer}
+.seg span{display:flex;align-items:center;justify-content:center;min-height:44px;font-weight:500;color:var(--muted);border-left:1px solid var(--line)}
+.seg label:first-child span{border-left:0}
+.seg input:checked+span{background:var(--ink);color:var(--bg)}
+.calc{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:10px}
+.calc div{min-width:0}
+.calc .k{font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.calc .v{font-family:var(--f-data);font-weight:600;font-size:15px;overflow-wrap:anywhere}
+.reveal{display:flex;flex-direction:column;gap:12px;border:1px solid var(--warn);background:var(--warn-bg);border-radius:10px;padding:12px}
+.reveal[hidden]{display:none}
+.btn{font:inherit;font-weight:600;font-size:16px;min-height:48px;padding:0 18px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--ink);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:6px}
+.btn.primary{background:var(--accent);color:var(--accent-ink);border-color:transparent;font-family:var(--f-display);font-size:20px;letter-spacing:.08em;text-transform:uppercase}
+.btn.small{min-height:36px;font-size:13px;padding:0 12px}
+.btn.danger{color:var(--bad)}
+.btns{display:flex;gap:8px;flex-wrap:wrap}
+.err{color:var(--bad);background:var(--bad-bg);border-radius:8px;padding:10px 12px;font-size:14px}
+.err[hidden]{display:none}
+details.add>summary{list-style:none;cursor:pointer}
+details.add>summary::-webkit-details-marker{display:none}
+.hint{font-size:12.5px;color:var(--muted)}
+.tabs{position:fixed;left:0;right:0;bottom:0;z-index:20;background:var(--surface);border-top:1px solid var(--line);
+  display:grid;grid-template-columns:repeat(6,1fr);gap:1px;
+  padding:6px max(4px,env(safe-area-inset-right,0px)) calc(6px + env(safe-area-inset-bottom,0px)) max(4px,env(safe-area-inset-left,0px))}
+.gauge-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.gauge{background:var(--surface);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:10px;padding:12px}
+.gauge .gk{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.gauge .gv{font-family:var(--f-data);font-size:26px;font-weight:700;margin-top:2px}
+.gauge .gs{font-size:11px;color:var(--muted)}
+.obd-term{background:#090E17;color:#52C98D;font-family:var(--f-data);font-size:11px;padding:10px;border-radius:8px;max-height:110px;overflow-y:auto;line-height:1.4}
+.tabs button{font:inherit;background:none;border:0;color:var(--muted);display:flex;flex-direction:column;align-items:center;gap:2px;padding:6px 1px;border-radius:8px;cursor:pointer;font-size:10px;font-weight:600;letter-spacing:.05em;text-transform:uppercase}
+.tabs button svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.tabs button[aria-current=page]{color:var(--accent)}
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(84px + env(safe-area-inset-bottom,0px));z-index:30;background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:99px;font-size:14px;font-weight:500;max-width:calc(100% - 32px);text-align:center}
+.toast[hidden]{display:none}
+
+/* Pre-flight Checklist */
+.chk-row{display:flex;align-items:flex-start;gap:10px;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--surface-2);cursor:pointer}
+.chk-row input[type=checkbox]{width:20px;height:20px;margin-top:2px;accent-color:var(--good);cursor:pointer}
+.chk-row.done{background:var(--good-bg);border-color:transparent}
+
+/* Vehicle Dossier & Pre-Flight Modal & Print Styles */
+.modal{position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:100;display:flex;align-items:center;justify-content:center;padding:14px}
+.modal[hidden]{display:none}
+.modal-content{background:var(--surface);color:var(--ink);border-radius:12px;width:100%;max-width:640px;max-height:90vh;overflow-y:auto;padding:20px;border:1px solid var(--line);display:flex;flex-direction:column;gap:14px}
+@media print{
+  body{background:#fff!important;color:#000!important;padding:0!important}
+  .tabs,.mast,details.add,.btns,#fuel-add,#snag-add,#trip-add,.toast{display:none!important}
+  .modal{position:static!important;background:none!important;padding:0!important}
+  .modal-content{max-height:none!important;border:0!important;box-shadow:none!important;padding:0!important}
+  .card,.band,.item{border:1px solid #ccc!important}
+}
+</style>
+</head><body>
+
+<div class="wrap">
+  <header class="mast">
+    <div>
+      <h1>Car Tech Log</h1>
+      <div class="sub" id="mast-sub">Captain's flight log for the car</div>
+    </div>
+    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end">
+      <div class="plate" id="mast-plate">REG ----</div>
+      <button class="btn small" style="min-height:30px;padding:0 8px;font-size:11px;font-weight:700" onclick="openPreflightModal()">✈️ Pre-Flight</button>
+      <button class="btn small" style="min-height:30px;padding:0 8px;font-size:11px;font-weight:700" onclick="openDossierModal()">📄 Dossier</button>
+    </div>
+  </header>
+
+  <!-- TAB 1: SUMMARY / DASHBOARD -->
+  <main>
+  <section class="view" id="v-dash" aria-label="Dashboard"></section>
+
+  <!-- TAB 2: DEDICATED SEPARATE FUEL LOG & COST PAGE -->
+  <section class="view" id="v-fuel" hidden aria-label="Fuel Log and Costs"></section>
+
+  <!-- TAB 3: TRIPS LOG -->
+  <section class="view" id="v-trip" hidden aria-label="Trip logger">
+    <div id="trip-stats-banner"></div>
+
+    <details class="add" id="trip-add" open>
+      <summary class="btn primary">Log New Trip</summary>
+      
+      <!-- Quick Trip Presets (1-Tap Fill) -->
+      <div class="card" style="margin-top:10px;padding:10px">
+        <span class="lab" style="display:block;margin-bottom:6px">⚡ Quick Presets (1-Tap Route Fill):</span>
+        <div class="presets-bar">
+          <div class="preset-chip" onclick="applyPreset('commute')">🏢 Office Commute</div>
+          <div class="preset-chip" onclick="applyPreset('airport')">✈️ Airport Drop</div>
+          <div class="preset-chip" onclick="applyPreset('grocery')">🛒 Market / Errands</div>
+          <div class="preset-chip" onclick="applyPreset('highway')">🛣️ Motorway / Highway</div>
+        </div>
+      </div>
+
+      <form class="form card" id="trip-form" style="margin-top:8px" autocomplete="off" novalidate>
+        <div class="grid2">
+          <label class="fld"><span>Date</span><input type="date" id="t-date" required></label>
+          <label class="fld"><span>Purpose</span><select id="t-purpose"></select></label>
+        </div>
+        <div class="grid2">
+          <label class="fld"><span>Captain (PIC)</span><input type="text" id="t-captain" list="dl-captains" placeholder="Name" required></label>
+          <label class="fld"><span>Co-driver</span><input type="text" id="t-co" list="dl-captains" placeholder="Optional"></label>
+        </div>
+        <div class="grid2">
+          <label class="fld"><span>Departure</span><input type="text" id="t-from" list="dl-places" placeholder="From" required></label>
+          <label class="fld"><span>Destination</span><input type="text" id="t-to" list="dl-places" placeholder="To" required></label>
+        </div>
+        <div class="grid2">
+          <label class="fld"><span>Route / via</span><input type="text" id="t-via" list="dl-routes" placeholder="Optional"></label>
+          <label class="fld"><span>Passengers</span><input type="number" id="t-pax" inputmode="numeric" min="0" max="20" placeholder="0"></label>
+        </div>
+        <div class="grid3">
+          <label class="fld">
+            <span style="display:flex;justify-content:space-between">
+              <span>Off-blocks</span>
+              <a href="javascript:void(0)" onclick="setTimeNow('#t-dep')" style="color:var(--accent);text-decoration:none">Now</a>
+            </span>
+            <input type="time" id="t-dep">
+          </label>
+          <label class="fld">
+            <span style="display:flex;justify-content:space-between">
+              <span>On-blocks</span>
+              <a href="javascript:void(0)" onclick="setTimeNow('#t-arr')" style="color:var(--accent);text-decoration:none">Now</a>
+            </span>
+            <input type="time" id="t-arr">
+          </label>
+          <label class="fld">
+            <span>Parked / Stop (m)</span>
+            <input type="number" id="t-stop" inputmode="numeric" min="0" placeholder="0">
+          </label>
+        </div>
+        <div class="grid2">
+          <label class="fld">
+            <span style="display:flex;justify-content:space-between">
+              <span>Odometer out (km)</span>
+              <span class="pill" style="padding:1px 6px;font-size:9px" id="lbl-locked-odo">Locked to Cur</span>
+            </span>
+            <input type="number" id="t-odo-out" inputmode="numeric" min="0" step="1" required>
+          </label>
+          <label class="fld"><span>Odometer in (km)</span><input type="number" id="t-odo-in" inputmode="numeric" min="0" step="1" required></label>
+        </div>
+        <div class="calc" aria-live="polite">
+          <div><div class="k">Distance</div><div class="v" id="c-dist">-</div></div>
+          <div><div class="k">Drive Time</div><div class="v" id="c-block">-</div></div>
+          <div><div class="k">Move km/h</div><div class="v" id="c-speed">-</div></div>
+          <div><div class="k" id="c-eff-lbl">Fuel Est</div><div class="v" id="c-eff">-</div></div>
+        </div>
+        <div class="fld"><span class="lab">Day / Night</span>
+          <div class="seg" role="radiogroup">
+            <label><input type="radio" name="dn" value="Day" checked><span>Day</span></label>
+            <label><input type="radio" name="dn" value="Night"><span>Night</span></label>
+          </div></div>
+        <div class="grid2">
+          <label class="fld"><span>Weather</span><select id="t-weather"></select></label>
+          <label class="fld"><span>Road condition</span><select id="t-road"></select></label>
+        </div>
+        <div class="fld"><span class="lab">Pre-trip check done</span>
+          <div class="seg" role="radiogroup">
+            <label><input type="radio" name="pre" value="Y" checked><span>Yes</span></label>
+            <label><input type="radio" name="pre" value="N"><span>No</span></label>
+          </div></div>
+        <div class="fld"><span class="lab">Snag raised on this trip</span>
+          <div class="seg" role="radiogroup">
+            <label><input type="radio" name="snag" value="N" checked><span>No</span></label>
+            <label><input type="radio" name="snag" value="Y"><span>Yes</span></label>
+          </div></div>
+        <div class="reveal" id="t-snag-box" hidden>
+          <label class="fld"><span>System</span><select id="t-snag-sys"></select></label>
+          <label class="fld"><span>Severity</span><select id="t-snag-sev"></select></label>
+          <label class="fld"><span>Defect description</span><textarea id="t-snag-desc" placeholder="What defect or symptom occurred?"></textarea></label>
+        </div>
+        <label class="fld"><span>Remarks</span><textarea id="t-remarks" placeholder="Optional trip notes"></textarea></label>
+        <div class="err" id="t-err" role="alert" hidden></div>
+        <button class="btn primary" type="submit" id="t-save">Log trip</button>
+      </form>
+    </details>
+
+    <div id="trip-history-section"></div>
+  </section>
+
+  <!-- TAB 4: REPAIRS & DEFECTS -->
+  <section class="view" id="v-snags" hidden aria-label="Defects and Repairs"></section>
+
+  <!-- TAB 5: SERVICE & SETUP -->
+  <section class="view" id="v-service" hidden aria-label="Service and setup"></section>
+
+  <!-- TAB 6: ELM327 OBD2 LIVE TELEMETRY -->
+  <section class="view" id="v-obd" hidden aria-label="OBD2 Live Telemetry"></section>
+  </main>
+</div>
+
+<!-- PRE-FLIGHT & HIGHWAY READINESS MODAL -->
+<div class="modal" id="preflight-modal" hidden>
+  <div class="modal-content">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid var(--line);padding-bottom:10px">
+      <div>
+        <h2 style="font-size:20px;color:var(--ink);margin:0">✈️ PRE-FLIGHT & HIGHWAY READINESS</h2>
+        <div class="sub">Toyota Belta 1.0L (1KR-FE CVT) Departure Inspection</div>
+      </div>
+      <button class="btn small" onclick="closePreflightModal()">✕ Close</button>
+    </div>
+    <div id="preflight-body"></div>
+    <div class="btns" style="margin-top:6px;justify-content:space-between">
+      <button class="btn primary small" onclick="completePreflightCheck()">✓ Mark Pre-Trip Done & Close</button>
+      <button class="btn small" onclick="closePreflightModal()">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- VEHICLE RESALE HEALTH DOSSIER MODAL -->
+<div class="modal" id="dossier-modal" hidden>
+  <div class="modal-content">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid var(--line);padding-bottom:10px">
+      <div>
+        <h2 style="font-size:20px;color:var(--ink);margin:0">VEHICLE RESALE HEALTH DOSSIER</h2>
+        <div class="sub">Certified Maintenance & Mileage Verification Record</div>
+      </div>
+      <button class="btn small" onclick="closeDossierModal()">✕ Close</button>
+    </div>
+    <div id="dossier-body"></div>
+    <div class="btns" style="margin-top:10px;justify-content:flex-end">
+      <button class="btn primary small" onclick="window.print()">🖨️ Print / Save as PDF</button>
+      <button class="btn small" onclick="closeDossierModal()">Done</button>
+    </div>
+  </div>
+</div>
+
+<datalist id="dl-captains"></datalist>
+<datalist id="dl-places"></datalist>
+<datalist id="dl-routes"></datalist>
+
+<nav class="tabs" aria-label="Sections">
+  <button data-tab="dash" aria-current="page"><svg viewBox="0 0 24 24"><path d="M3 3h8v8H3zM13 3h8v5h-8zM13 11h8v10h-8zM3 14h8v7H3z"/></svg>Summary</button>
+  <button data-tab="fuel"><svg viewBox="0 0 24 24"><path d="M3 22V5a3 3 0 0 1 3-3h8a3 3 0 0 1 3 3v17M17 9h2a2 2 0 0 1 2 2v7a2 2 0 0 0 2 2M3 11h14M7 6h6"/></svg>Fuel Log</button>
+  <button data-tab="trip"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>Trips</button>
+  <button data-tab="snags"><svg viewBox="0 0 24 24"><path d="M12 3 2 20h20L12 3zM12 10v4M12 17v.5"/></svg>Repairs</button>
+  <button data-tab="obd"><svg viewBox="0 0 24 24"><path d="M5 12.55a11 11 0 0 1 14.08 0M1.42 9a16 16 0 0 1 21.16 0M8.53 16.11a6 6 0 0 1 6.95 0M12 20h.01"/></svg>OBD2</button>
+  <button data-tab="service"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9 7 7M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/></svg>Service</button>
+</nav>
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+<script>
+(function(){
+"use strict";
+var $=function(s,r){return (r||document).querySelector(s)};
+var $$=function(s,r){return Array.prototype.slice.call((r||document).querySelectorAll(s))};
+var esc=function(s){return String(s==null?"":s).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]})};
+var isNum=function(v){return typeof v==="number"&&isFinite(v)};
+var num=function(v){var n=parseFloat(v);return isFinite(n)?n:null};
+var MONTHS=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+var pad=function(n){return n<10?"0"+n:""+n};
+var todayISO=function(){var d=new Date();return d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate())};
+var parseISO=function(s){var p=String(s).split("-");return new Date(+p[0],+p[1]-1,+p[2])};
+var fmtDate=function(s){if(!s)return "";var d=parseISO(s);return d.getDate()+" "+MONTHS[d.getMonth()]+" "+d.getFullYear()};
+var fmtInt=function(n){return isNum(n)?Math.round(n).toLocaleString("en-US"):"-"};
+var fmtDec=function(n,d){return isNum(n)?n.toLocaleString("en-US",{minimumFractionDigits:d,maximumFractionDigits:d}):"-"};
+var fmtHM=function(min){if(!isNum(min)||min<=0)return "-";var h=Math.floor(min/60),m=Math.round(min-h*60);if(m===60){h++;m=0}return (h>0?h+"h ":"")+pad(m)+"m"};
+var toMin=function(t){if(!t)return null;var p=t.split(":");return (+p[0])*60+(+p[1])};
+var startOfToday=function(){var d=new Date();return new Date(d.getFullYear(),d.getMonth(),d.getDate())};
+
+var LISTS={
+  weather:["Clear","Cloudy","Rain","Fog / Haze","Dust","Hot (>38C)","Storm"],
+  road:["Dry","Wet","Congested","Rough / Potholes","Flooded","Construction","Highway","Off-road"],
+  purpose:["Commute","Errand","Family","Business","Long Trip","Leisure","Service Run","Test Drive"],
+  system:["Engine","Transmission","Brakes","Suspension / Steering","Tyres / Wheels","Electrical / Battery","AC / Heating","Lights","Body / Glass","Interior","Fuel System","Cooling","Exhaust","Other"],
+  severity:["NO-GO (Grounded)","Fix Soon","Monitor","Cosmetic"],
+  status:["Open","Deferred","Closed"]
+};
+var DEFAULT_MAINT=[
+  ["Engine oil & filter",5000,6],["Air filter",15000,12],["Cabin / AC filter",15000,12],["Spark plugs",40000,36],
+  ["Tyre rotation & balance",10000,6],["Wheel alignment",20000,12],["Brake pads / discs inspection",20000,12],
+  ["Brake fluid",40000,24],["Coolant",40000,24],["Transmission fluid",40000,36],["Battery health check",0,12],
+  ["Wipers",0,12],["Full service / general inspection",10000,12]
+];
+var PREFLIGHT_ITEMS=[
+  { id:"oil", label:"Engine Oil Level & Color (1KR-FE)", sub:"Check dipstick on level ground; top up if near lower dot" },
+  { id:"coolant", label:"Coolant Reservoir & Radiator Cap", sub:"Verify level at FULL mark when cold; check fan cut-in" },
+  { id:"cvt", label:"CVT Transmission Smoothness & No Leaks", sub:"Confirm clean engagement in D/R with zero hesitation" },
+  { id:"tyres", label:"Tyre Tread & 32 PSI Cold Pressure (+ Spare)", sub:"Check all 4 tyres + spare wheel, jack, and wheel spanner" },
+  { id:"brakes", label:"Brake Fluid & Pad Bite", sub:"Verify firm pedal feel and clean handbrake hold" },
+  { id:"obd", label:"ELM327 OBD2 Scanner & Emergency Kit Stowed", sub:"Keep Bluetooth OBD2 adapter, jumper cables & tow rope in boot" }
+];
+
+var db=null, dl=true;
+var HISTORICAL_FUELS = [{"id": "32q0VUD7i2jalB5q38e6", "station": "Local Pump", "cost": 9160, "litres": 36.51, "date": "2026-01-11", "n": 8, "ppl": "250.89", "createdAt": 1792755333545, "odo": 200912, "remarks": "Prev: 200912", "payMode": "Cash"}, {"id": "38PoRqbosNz9y9t47S5R", "station": "Local Pump", "litres": 15.52, "ppl": "322.16", "n": 12, "cost": 5000, "date": "2026-03-09", "createdAt": 1792755333554, "odo": 202181, "payMode": "Cash", "remarks": "Note: (167 km)"}, {"id": "3Sgs280Xg13PofoosZXQ", "station": "Local Pump", "cost": 12526, "litres": 36.95, "date": "2026-08-24", "n": 24, "ppl": "339.0", "createdAt": 1792755333555, "odo": null, "remarks": "Part 2", "payMode": "Cash"}, {"id": "5sdJYIeCBnUhqgLafEwr", "odo": 200474, "station": "Local Pump", "litres": 37.6, "n": 7, "ppl": "264.73", "date": "2025-12-24", "payMode": "Cash", "createdAt": 1792755333545, "remarks": "Prev: 200474 (Trip: 437.8) | Avg: ~12", "cost": 9954}, {"id": "6KiTqeSHRkAu13RUPLYb", "litres": 34.33, "date": "2026-02-01", "ppl": "256.29", "cost": 8798.43, "remarks": "Logged Avg: ~11.90", "createdAt": 1792755333554, "payMode": "Cash", "station": "Local Pump", "odo": 201396, "n": 9}, {"id": "6P09egZFUotecjVQJSRI", "odo": 207079, "cost": 11000, "createdAt": 1793271097631, "ppl": "29.00", "remarks": "", "isFull": false, "date": "2026-10-29", "litres": 379.34, "station": "Aramco", "payMode": "Card", "n": 29}, {"id": "8lQ9EGEvfSO9b1yxmpkL", "ppl": "", "payMode": "Cash", "remarks": "", "litres": 0, "n": 26, "date": "", "odo": null, "station": "Local Pump", "cost": 2000, "createdAt": 1792755333555}, {"id": "Ay0BA7OgoZuAuFot8935", "n": 6, "odo": 200068, "station": "Local Pump", "createdAt": 1792755333545, "payMode": "Cash", "litres": 33.34, "remarks": "Prev: 200068 (Trip: 405.5) | Avg: 10.97", "cost": 8950, "ppl": "268.45", "date": "2025-12-02"}, {"id": "BNsHAIuCNpayA5gr2HnU", "n": 23, "payMode": "Cash", "remarks": "Part 1", "ppl": "330.7", "litres": 24.3, "cost": 8036, "date": "2026-08-24", "station": "Local Pump", "createdAt": 1792755333555, "odo": null}, {"id": "BlILdhS5abNCyusr6vaZ", "odo": 199665, "remarks": "Prev: 199665 (Trip: 412.7) | Avg: 13.72", "litres": 29.07, "date": "2025-11-22", "n": 5, "payMode": "Cash", "cost": 7750, "ppl": "266.6", "createdAt": 1792755333545, "station": "Local Pump"}, {"id": "LQYei2vPZ2uXm51hTlMJ", "odo": null, "n": 25, "createdAt": 1792755333555, "station": "Local Pump", "litres": 0, "date": "2026-08-31", "cost": 5000, "ppl": "", "remarks": "", "payMode": "Cash"}, {"id": "LaEF1baLJQ8AMLF03vnI", "date": "2026-07-14", "remarks": "Trip Note: (332.1)", "cost": 9030, "createdAt": 1792755333555, "ppl": "312.46", "payMode": "Cash", "litres": 28.9, "odo": null, "station": "Local Pump", "n": 20}, {"id": "R8tAjrCdWdbd7eH6bOZR", "odo": null, "litres": 0, "n": 1, "date": "", "remarks": "Initial entry", "createdAt": 1792755333543, "cost": 6000, "payMode": "Cash", "station": "Local Pump", "ppl": ""}, {"id": "SraovO3fUFqGEbLsS76W", "date": "2026-04-26", "ppl": "403.65", "cost": 7403, "remarks": "Prev: 202904 (Trip: 155.7) | Avg: 9.1", "litres": 18.34, "payMode": "Cash", "n": 16, "odo": 203060, "station": "Local Pump", "createdAt": 1792755333555}, {"id": "Tlhto3Qd7w9EJ7iGn2jX", "payMode": "Cash", "createdAt": 1792755333555, "remarks": "Written as 20465 / 204965", "n": 22, "odo": 204965, "litres": 22.6, "ppl": "340.71", "station": "Local Pump", "cost": 7700, "date": "2026-08-12"}, {"id": "U2MJPXR3oGv5UZQtq5UR", "n": 13, "station": "Local Pump", "createdAt": 1792755333554, "ppl": "320.43", "litres": 25.35, "cost": 8123, "date": "2026-03-24", "odo": 202426, "payMode": "Cash", "remarks": "Prev: 202181"}, {"id": "iXBwOOjDgpdNbQBcelru", "odo": 204436, "litres": 34, "payMode": "Cash", "n": 19, "createdAt": 1792755333555, "remarks": "Trip Note: (311.8)", "ppl": "305.88", "station": "Local Pump", "date": "2026-07-02", "cost": 10400}, {"id": "k9uo2xPoGMWa3eJJSmwM", "date": "", "createdAt": 1792755333554, "ppl": "", "cost": 9000, "remarks": "Logged 9,000/-", "payMode": "Cash", "litres": 0, "odo": null, "station": "Local Pump", "n": 11}, {"id": "lMbCiFFZLPCCUfWvh68z", "odo": 204792, "station": "Local Pump", "payMode": "Cash", "remarks": "", "n": 21, "ppl": "332.75", "createdAt": 1792755333555, "date": "2026-07-24", "cost": 6655, "litres": 20}, {"id": "mVXyDr6dhlrtq2lieC3x", "n": 17, "station": "Local Pump", "litres": 24.3, "ppl": "416.21", "cost": 10114, "date": "2026-05-12", "createdAt": 1792755333555, "odo": 203258, "payMode": "Cash", "remarks": ""}, {"id": "migDdsWqgT1t4EuxgMhx", "odo": null, "payMode": "Cash", "remarks": "31 L", "n": 2, "ppl": "264.52", "litres": 31, "createdAt": 1792755333544, "date": "2025-10-23", "station": "Local Pump", "cost": 8200}, {"id": "mkRPAhbQr6kEG8IeRI0K", "litres": 31.68, "cost": 10596, "odo": 207298, "isFull": true, "date": "2026-11-13", "payMode": "Card", "remarks": "", "n": 30, "ppl": "334.47", "station": "Aramco", "createdAt": 1794578744170}, {"id": "pVDBibsN2YwHjcGw1rRH", "n": 27, "odo": null, "station": "Local Pump", "createdAt": 1792755333555, "litres": 0, "payMode": "Cash", "remarks": "Trip Note: 328.7", "cost": 14500, "ppl": "", "date": ""}, {"id": "poeT1CQaaqq7kGpj5iHu", "odo": null, "n": 10, "station": "Local Pump", "payMode": "Cash", "remarks": "24.0 L", "ppl": "285.42", "cost": 6850, "litres": 24, "date": "2026-02-14", "createdAt": 1792755333554}, {"id": "q2rm9i2NJIAl7TJTKuXN", "litres": 32.37, "odo": 198992, "n": 3, "date": "2025-11-02", "createdAt": 1792755333545, "remarks": "Prev: 198992 (Trip: 325.6)", "payMode": "Cash", "cost": 8670, "station": "Local Pump", "ppl": "267.84"}, {"id": "s37ck2Yh4T9XOrQhJo6v", "litres": 13.22, "payMode": "Cash", "remarks": "", "odo": 202531, "station": "Local Pump", "createdAt": 1792755333554, "cost": 4200, "ppl": "317.7", "n": 14, "date": "2026-04-01"}, {"id": "u5iWZmsjn87koLwLEJ9L", "n": 28, "payMode": "Cash", "remarks": "", "ppl": "", "litres": 0, "cost": 12000, "date": "2026-10-11", "station": "Local Pump", "createdAt": 1792755333555, "odo": 206698}, {"id": "ugNXNI6wzbhHC069Zyb2", "cost": 13665, "station": "Local Pump", "odo": 202904, "date": "2026-04-18", "remarks": "Prev: 202531 - 202904", "payMode": "Cash", "litres": 37.4, "createdAt": 1792755333554, "n": 15, "ppl": "365.37"}, {"id": "w6lCHqG6iscmQwYywPCe", "odo": null, "createdAt": 1792755333555, "station": "Local Pump", "n": 18, "ppl": "522.62", "litres": 26.3, "payMode": "Cash", "remarks": "", "date": "2026-06-13", "cost": 13745}, {"id": "x3saFV6Q4Q3T8uUHtepz", "odo": 199317, "payMode": "Cash", "remarks": "Prev: 199317 (Trip: 337.6) | Avg: 11.1", "n": 4, "ppl": "266.71", "litres": 30.46, "createdAt": 1792755333545, "date": "2025-11-10", "station": "Local Pump", "cost": 8124}];
+var HISTORICAL_TRIPS = [{"id": "0Dp9jmSvb76al7OqCGWh", "from": "Home", "remarks": "", "dn": "Night", "odoOut": 207081, "purpose": "Leisure", "createdAt": 1793376381566, "odoIn": 207103, "captain": "Maqsood", "date": "2026-10-30", "arr": "21:05", "co": "Papa", "dep": "08:05", "weather": "Dust", "snagRaised": "N", "pax": 3, "n": 5, "to": "Home", "via": "Majeed sre", "road": "Rough / Potholes", "preCheck": "N"}, {"id": "D4zKLC1mGC00jfL1UhEa", "arr": "18:04", "to": "Home", "odoOut": 206970, "captain": "Maqsood", "remarks": "", "createdAt": 1792760749398, "date": "2026-10-23", "odoIn": 207005, "pax": 1, "from": "Home", "purpose": "Commute", "dep": "09:04", "road": "Dry", "weather": "Clear", "n": 1, "preCheck": "Y", "dn": "Day", "via": "Office, zaiten", "co": "", "snagRaised": "N"}, {"id": "ETw9hLFBokjpqo1KWPGt", "co": "", "date": "2026-11-15", "dep": "00:33", "from": "Home", "dn": "Night", "weather": "Clear", "preCheck": "Y", "arr": "15:33", "n": 11, "to": "Home", "snagRaised": "Y", "odoIn": 207448, "pax": 0, "odoOut": 207429, "road": "Dry", "createdAt": 1794738881098, "remarks": "", "captain": "Maqsood", "via": "Munir garden", "purpose": "Commute"}, {"id": "KWjMaUM61zOSHo9wRCVa", "createdAt": 1792949482152, "snagRaised": "N", "to": "Hone", "via": "Junaid bhai, tuition", "preCheck": "Y", "date": "2026-10-25", "weather": "Dust", "from": "Home", "arr": "21:06", "purpose": "Commute", "road": "Dry", "odoIn": 207063, "odoOut": 207035, "co": "Farhat iqbal", "captain": "Maqsood", "remarks": "Fuel should be refilled", "dep": "17:30", "pax": 4, "dn": "Night", "n": 3}, {"id": "a22Wvc1cewFyxjzvj9mS", "co": "No", "n": 9, "date": "2026-11-14", "via": "Ayesha manzl", "odoOut": 207298, "weather": "Clear", "createdAt": 1794657889618, "dn": "Day", "preCheck": "Y", "from": "Home", "pax": 0, "odoIn": 207354, "dep": "13:04", "snagRaised": "N", "to": "Home", "road": "Dry", "arr": "17:04", "remarks": "Led set krwai", "captain": "Maqsood", "purpose": "Service Run"}, {"id": "byGVvhtk4AJiMns5RHCQ", "purpose": "Test Drive", "preCheck": "Y", "from": "Home", "to": "Home", "captain": "Maqsood", "road": "Dry", "via": "Mechanic rashid minhaas", "dn": "Day", "pax": 0, "createdAt": 1793270909380, "odoIn": 207081, "snagRaised": "N", "dep": "00:50", "odoOut": 207063, "n": 4, "date": "2026-10-29", "weather": "Clear", "remarks": "Repairs done fuel pump and longg cracking", "arr": "15:47", "co": ""}, {"id": "kYbi84RELTU72qkIqx6C", "dep": "08:15", "snagRaised": "Y", "co": "Narmeen", "purpose": "Commute", "captain": "Maqsood", "odoIn": 207429, "from": "Home", "n": 10, "arr": "01:24", "remarks": "", "dn": "Day", "date": "2026-11-15", "to": "Home", "weather": "Clear", "via": "Ayesha manzil, malik sasuraal", "road": "Dry", "preCheck": "Y", "createdAt": 1794687905371, "odoOut": 207354, "pax": 4}, {"id": "ogujObQXjl8ogzOeMHVV", "from": "Home", "weather": "Clear", "date": "2026-10-24", "dep": "01:56", "dn": "Night", "pax": 2, "createdAt": 1792791349881, "co": "Narmeen", "n": 2, "arr": "02:35", "snagRaised": "N", "preCheck": "Y", "captain": "Maqsood", "remarks": "", "via": "Airport,imtiaz", "odoOut": 207005, "to": "Home", "odoIn": 207035, "road": "Dry", "purpose": "Commute"}, {"id": "uRAEstFxecbrFKzBLCnF", "preCheck": "Y", "createdAt": 1793453005563, "to": "Home", "pax": 4, "odoIn": 207134, "weather": "Clear", "via": "Niasi uncle, jinag mall", "road": "Dry", "from": "Home", "snagRaised": "N", "co": "", "purpose": "Commute", "date": "2026-10-31", "dep": "15:22", "captain": "Maqsood", "n": 6, "odoOut": 207103, "dn": "Day", "arr": "18:22", "remarks": ""}, {"id": "w6onEbIcTTkWtWhOpaKJ", "date": "2026-11-08", "weather": "Clear", "to": "Home", "from": "Home", "arr": "21:56", "preCheck": "Y", "dep": "05:55", "odoOut": 207134, "dn": "Night", "n": 7, "captain": "Maqsood", "snagRaised": "N", "pax": 5, "purpose": "Commute", "odoIn": 207226, "createdAt": 1794156982975, "road": "Dry", "remarks": "", "co": "", "via": "Sasuraal"}, {"id": "x9GoCZWTiJ5b06tQbohn", "odoIn": 207297, "to": "Home", "n": 8, "via": "Pnwhs", "date": "2026-11-09", "from": "Home", "weather": "Clear", "odoOut": 207226, "pax": 3, "dep": "15:46", "road": "Dry", "co": "Farhat iqbal", "arr": "18:46", "snagRaised": "N", "preCheck": "Y", "captain": "Maqsood", "purpose": "Family", "dn": "Day", "remarks": "", "createdAt": 1794577653488}];
+var HISTORICAL_MAINT = [{"id": "2GyddWAl8ez0Qu6DR6oK", "cost": 8000, "date": "2026-11-14", "status": "Closed", "action": "Led new 10 invh\nLock installee", "workshop": "Ayesha mazil", "trip": 0, "createdAt": 1794657927078, "system": "Other", "by": "Maqsood", "n": 25, "odo": 207354, "closed": "2026-11-14", "severity": "Cosmetic", "desc": "Led tv renew and lock system"}, {"id": "3F0jQsVJL4PwoL7qquGt", "cost": 3000, "n": 20, "date": "2026-08-26", "status": "Closed", "closed": "2026-08-26", "system": "Electrical", "remarks": "", "action": "Electrical Work", "workshop": "Local Workshop", "odo": null, "createdAt": 1792755333881, "desc": "Electrical Work", "payMode": "Cash"}, {"id": "4row5flZVmxne08wxhNN", "cost": 16400, "n": 9, "date": "2026-01-11", "status": "Closed", "closed": "2026-01-11", "system": "Brakes & Suspension", "remarks": "Includes bumper, steering cover", "action": "Spacers, Bush, Brake Pads", "workshop": "Local Workshop", "odo": null, "createdAt": 1792755333878, "desc": "Spacers, Bush, Brake Pads", "payMode": "Cash"}, {"id": "6cy8iTI0wrvz5wU4ap2R", "cost": 3500, "date": "2026-03-19", "remarks": "Bracketed with service row", "createdAt": 1792755333878, "workshop": "Local Workshop", "action": "Wiring Repair", "system": "Electrical", "closed": "2026-03-19", "status": "Closed", "payMode": "Cash", "desc": "Wiring Repair", "n": 14, "odo": null}, {"id": "AkDOYTIxf7weIym8L2j3", "cost": 12000, "createdAt": 1792755656572, "status": "Closed", "n": 22, "workshop": "Truckker.pk", "action": "raheel bahi sy new tracker install krwaya", "odo": 206698, "closed": "2026-10-23", "trip": 0, "system": "Engine", "payMode": "Online / App", "severity": "Fix Soon", "date": "2026-10-01", "desc": "tracking not avalible", "by": "maqsood"}, {"id": "B8ic3iJ6KdQzeyZQGWGE", "date": "2025-10-25", "cost": 10000, "payMode": "Cash", "closed": "2025-10-25", "status": "Closed", "action": "Battery Replacement", "createdAt": 1792755333878, "system": "Electrical & Battery", "n": 5, "remarks": "Date aligned with late Oct 2025", "desc": "Battery Replacement", "odo": null, "workshop": "Local Workshop"}, {"id": "IPbeb8AoOJ8JjWrP1bB9", "payMode": "Cash", "closed": "2026-06-26", "date": "2026-06-26", "status": "Closed", "cost": 27000, "action": "Car Lights, Electrician Work, Carpet", "system": "Electrical & Interior", "desc": "Car Lights, Electrician Work, Carpet", "n": 17, "workshop": "Local Workshop", "remarks": "Logged as 'June 26'", "odo": null, "createdAt": 1792755333879}, {"id": "MHDusXYAEJinVfX6v9xQ", "cost": 0, "date": "2026-02-21", "remarks": "Grouped with wiring (total Rs. 3,500)", "createdAt": 1792755333878, "workshop": "Local Workshop", "action": "Vehicle General Service", "system": "General Service", "closed": "2026-02-21", "status": "Closed", "payMode": "Cash", "desc": "Vehicle General Service", "n": 13, "odo": null}, {"id": "N9XtLvNIWXANI5dNwG3E", "date": "2026-08-01", "status": "Closed", "action": "Fuel pump repaired, pressure nill tha and coil and plugs saaaf", "severity": "Fix Soon", "cost": 3000, "workshop": "Malku", "closed": "2026-10-29", "n": 23, "by": "Maqsood", "odo": 207063, "system": "Engine", "trip": 0, "createdAt": 1793263893950, "desc": "Long cranking due to either fuel pump issue or coil"}, {"id": "NVvgp9igre0BDNCASjT1", "desc": "Radiator Service", "n": 12, "remarks": "Ditto mark on date (15-2-2026)", "workshop": "Local Workshop", "action": "Radiator Service", "system": "Cooling System", "closed": "2026-02-15", "status": "Closed", "date": "2026-02-15", "payMode": "Cash", "odo": null, "createdAt": 1792755333878, "cost": 1800}, {"id": "OxKV51FgLibpMMFQVupP", "remarks": "", "desc": "Tuning & Labour", "createdAt": 1792755333878, "n": 7, "odo": null, "payMode": "Cash", "system": "Engine & Labour", "action": "Tuning & Labour", "status": "Closed", "closed": "2025-11-05", "cost": 4600, "date": "2025-11-05", "workshop": "Local Workshop"}, {"id": "PNBdm44mAEQE8X1Rr63N", "workshop": "Local Workshop", "date": "2026-08-27", "cost": 15000, "createdAt": 1792755333881, "remarks": "", "closed": "2026-08-27", "status": "Closed", "n": 21, "action": "Fuel Pump & Spark Plugs", "system": "Engine & Ignition", "desc": "Fuel Pump & Spark Plugs", "odo": null, "payMode": "Cash"}, {"id": "SZTlChQSTPuk7RrxeNmz", "remarks": "Ditto mark on date (15-2-2026)", "odo": null, "cost": 11000, "workshop": "Local Workshop", "n": 11, "date": "2026-02-15", "payMode": "Cash", "system": "Suspension", "action": "Spring Shockers", "status": "Closed", "closed": "2026-02-15", "desc": "Spring Shockers", "createdAt": 1792755333878}, {"id": "Yk3EJkHtar5uC2S4WDHN", "createdAt": 1792755333878, "remarks": "", "n": 6, "workshop": "Local Workshop", "odo": null, "cost": 16500, "date": "2025-11-05", "status": "Closed", "closed": "2025-11-05", "payMode": "Cash", "system": "Transmission & Fluids", "action": "CVT Gear Oil", "desc": "CVT Gear Oil"}, {"id": "bI2tUAo0jciRw6Srwj59", "createdAt": 1792755333878, "n": 10, "workshop": "Local Workshop", "desc": "AC Cabin Filter, Air Filter, Compressor Oil, AC Gas Check & Cleaning", "payMode": "Cash", "odo": null, "cost": 13100, "closed": "2026-02-15", "date": "2026-02-15", "status": "Closed", "action": "AC Cabin Filter, Air Filter, Compressor Oil, AC Gas Check & Cleaning", "system": "AC & Filters", "remarks": ""}, {"id": "cwHL5X5ivj4jZT6OXn3a", "cost": 2500, "n": 1, "date": "2026-01-17", "status": "Closed", "closed": "2026-01-17", "system": "Suspension & Tyres", "remarks": "Written on top line", "action": "D-Bush Left Tyre", "workshop": "Local Workshop", "odo": null, "createdAt": 1792755333877, "payMode": "Cash", "desc": "D-Bush Left Tyre"}, {"id": "g2odlNsI5GYy6Wvkdpcu", "desc": "Car was not starting at initial all.liggts on but fuel pump light was off", "system": "Engine", "by": "Maqsood", "date": "2026-11-15", "severity": "Monitor", "createdAt": 1794738883528, "odo": 207448, "status": "Open", "n": 27, "trip": 11}, {"id": "gUCvPBsUqbORktYmeRgo", "action": "Headlight Bulbs", "remarks": "", "system": "Electrical & Lighting", "closed": "2026-03-19", "status": "Closed", "createdAt": 1792755333878, "cost": 1000, "date": "2026-03-19", "workshop": "Local Workshop", "payMode": "Cash", "desc": "Headlight Bulbs", "n": 15, "odo": null}, {"id": "is97ewlR65s7R49e40gC", "action": "AC Coil Replacement / Repair", "payMode": "Cash", "system": "AC & Cooling", "closed": "2026-07-05", "status": "Closed", "cost": 9000, "createdAt": 1792755333879, "date": "2026-07-05", "remarks": "", "desc": "AC Coil Replacement / Repair", "workshop": "Local Workshop", "n": 18, "odo": null}, {"id": "l1tKdODnQjDRYorjNsnX", "workshop": "Local Workshop", "date": "2025-10-22", "cost": 5000, "odo": null, "payMode": "Cash", "n": 4, "desc": "AC Wiring, Trunk Cable", "action": "AC Wiring, Trunk Cable", "system": "Electrical & Body", "createdAt": 1792755333878, "closed": "2025-10-22", "status": "Closed", "remarks": ""}, {"id": "lcyyCXIZsrxljRLa54Ex", "date": "2026-10-29", "system": "Engine", "desc": "Coil weak problem code shown in compiuter", "odo": 207063, "severity": "Monitor", "status": "Closed", "n": 24, "by": "Mexhanic malku", "trip": 0, "closed": "2026-11-01", "createdAt": 1793263920966}, {"id": "lj6YsQpT5S4t4Dz7wTgR", "date": "2025-10-25", "cost": 10000, "n": 2, "remarks": "", "createdAt": 1792755333878, "workshop": "Local Workshop", "desc": "Tracker Installation / Subscription", "odo": null, "closed": "2025-10-25", "status": "Closed", "action": "Tracker Installation / Subscription", "system": "Security & Tracking", "payMode": "Cash"}, {"id": "mxjLor2DNVVEIJb3DJhW", "severity": "Monitor", "system": "Engine", "createdAt": 1794687910483, "date": "2026-11-15", "desc": "Engine stall", "status": "Open", "by": "Maqsood", "odo": 207429, "trip": 10, "n": 26}, {"id": "nal86qryLmc9SPXhkIua", "cost": 5000, "createdAt": 1792755333878, "date": "2025-10-22", "workshop": "Local Workshop", "remarks": "", "odo": null, "desc": "Washing / Clean Car", "action": "Washing / Clean Car", "system": "Detailing & Cleaning", "closed": "2025-10-22", "payMode": "Cash", "status": "Closed", "n": 3}, {"id": "rStEWwmoEWYfdPXdfmCp", "action": "Engine Oil Change", "system": "Engine & Fluids", "remarks": "Odometer logged: 204,595 km", "closed": "2026-07-15", "status": "Closed", "createdAt": 1792755333881, "cost": 11000, "date": "2026-07-15", "workshop": "Local Workshop", "payMode": "Cash", "desc": "Engine Oil Change", "n": 19, "odo": 204595}, {"id": "vhkUY4TxkcHRvtZtHnQQ", "n": 8, "workshop": "Local Workshop", "payMode": "Cash", "createdAt": 1792755333878, "desc": "Engine Oil Change", "cost": 5000, "date": "2025-12-08", "action": "Engine Oil Change", "system": "Engine & Fluids", "closed": "2025-12-08", "status": "Closed", "remarks": "", "odo": null}, {"id": "y0P6DxyXIba6zbyJMw1q", "status": "Closed", "closed": "2026-04-06", "system": "Engine Tuning", "action": "Engine Tuning", "desc": "Engine Tuning", "odo": null, "workshop": "Local Workshop", "remarks": "", "createdAt": 1792755333878, "payMode": "Cash", "cost": 9000, "date": "2026-04-06", "n": 16}];
+var HISTORICAL_CHECKS = [{"id": "7IGAI5GCSiNuN60djHG0", "notes": "New battery (Rs. 10,000)", "months": 24, "lastDate": "2025-10-25", "name": "Battery Replacement Check", "km": 0, "lastOdo": 198850}, {"id": "8Gs34yXiKdVb0K4nY6jx", "months": 24, "km": 40000, "lastDate": "2026-10-26", "name": "Radiator Coolant Service", "lastOdo": 207063, "notes": "Coolant flushed (Rs. 1,800)"}, {"id": "QlbpoOqcL53s8GlwPHxv", "km": 6500, "lastDate": "2026-07-15", "months": 6, "name": "Engine Oil & Filter", "lastOdo": 204595}, {"id": "SxCMl6UZCdjo6yNHUMGI", "lastDate": "2026-02-15", "lastOdo": 201720, "months": 12, "name": "Suspension Bushing & Alignment", "km": 20000, "notes": "D-Bush & Shocker Springs (Rs. 13,500)"}, {"id": "c4bvrKfKLt9tlXKdWlTK", "lastDate": "2026-08-27", "lastOdo": 205500, "notes": "New pump and plugs (Rs. 15,000)", "name": "Spark Plugs & Fuel Pump", "months": 36, "km": 40000}, {"id": "jf4smjV0U5sfJjsIXcJ1", "lastOdo": 201720, "lastDate": "2026-02-15", "km": 15000, "notes": "Filters serviced (Rs. 13,100)", "name": "Air Filter & AC Cabin Filter", "months": 12}, {"id": "kLrVlnL14YiQkwkP6MWg", "km": 40000, "lastOdo": 199000, "lastDate": "2025-11-05", "notes": "Last changed Nov 2025 (Rs. 16,500)", "name": "CVT Gear Oil (Transmission)", "months": 24}, {"id": "vpmarRgcnriS3H0Bo8s8", "km": 20000, "lastDate": "2026-01-11", "name": "Brake Pads / Discs Inspection", "lastOdo": 200912, "notes": "Brake pads & bushes (Rs. 16,400)", "months": 12}];
+var HISTORICAL_CFG = {"model": "Belta", "make": "Toyota", "taxDue": "2027-10-01", "insExpiry": "2027-10-01", "startOdo": 198992, "reg": "AVN-774", "tankCap": 42};
+
+var S={
+  fuels: HISTORICAL_FUELS.slice(),
+  trips: HISTORICAL_TRIPS.slice(),
+  snags: HISTORICAL_MAINT.slice(),
+  maint: HISTORICAL_CHECKS.slice(),
+  cfg: Object.assign({}, HISTORICAL_CFG),
+  loaded: { trips: true, fuels: true, snags: true, maint: true, cfg: true },
+  tab: "dash",
+  editFuel: null,
+  fuelDraft: {},
+  editTrip: null,
+  tripDraft: {},
+  editSnag: null,
+  snagDraft: {},
+  editMaint: null,
+  maintDraft: {},
+  filter: { tripQ: "", tripPurp: "", fuelQ: "", snagQ: "", snagSys: "" },
+  preflightDone: {},
+  offline: false,
+  dbErr: ""
+};
+
+function curOdo(){
+  var m=num(S.cfg.startOdo)||0;
+  S.trips.forEach(function(t){if(isNum(t.odoIn)&&t.odoIn>m)m=t.odoIn});
+  S.fuels.forEach(function(f){if(isNum(f.odo)&&f.odo>m)m=f.odo});
+  return m;
+}
+function tripKm(t){return isNum(t.odoIn)&&isNum(t.odoOut)?Math.max(0,t.odoIn-t.odoOut):0}
+function tripElapsedMin(t){var a=toMin(t.dep),b=toMin(t.arr);if(a==null||b==null)return 0;return ((b-a)%1440+1440)%1440}
+function tripDriveMin(t){
+  var el = tripElapsedMin(t);
+  var stop = num(t.stopMin) || 0;
+  return el > stop ? (el - stop) : el;
+}
+
+/* Context-aware efficiency for a trip (Highway/Long Trip ~16 km/L vs City baseline) */
+function tripEffectiveKmPerL(purpose, road, baseEff){
+  var b = baseEff || 11.8;
+  if(purpose === "Long Trip" || road === "Highway"){
+    return Math.max(15.5, b * 1.32);
+  }
+  if(road === "Congested" || road === "Rough / Potholes"){
+    return Math.max(8.5, b * 0.88);
+  }
+  return b;
+}
+
+/* Compute per-fuel-entry tank-to-tank efficiency map */
+function computeFuelEfficiencyMap(){
+  var sorted = S.fuels.slice().sort(function(a,b){
+    return (a.odo||0)-(b.odo||0) || (a.date||"").localeCompare(b.date||"") || (a.n||0)-(b.n||0);
+  });
+  var map = {};
+  var points = [];
+  var prevOdo = null;
+  for(var i=0; i<sorted.length; i++){
+    var f = sorted[i];
+    var key = f.id || ("n_"+f.n);
+    if(isNum(f.odo) && f.odo > 0){
+      if(prevOdo !== null && f.odo > prevOdo && num(f.litres) > 0){
+        var d = f.odo - prevOdo;
+        var kml = d / num(f.litres);
+        if(kml >= 5 && kml <= 26){
+          map[key] = { kml: kml, dist: d };
+          points.push({ label: f.date ? f.date.slice(5) : ("#"+f.n), kml: kml, odo: f.odo });
+        }
+      }
+      prevOdo = f.odo;
+    }
+  }
+  return { map: map, points: points };
+}
+
+/* ---------- TANK-TO-TANK & STATS ---------- */
+function stats(){
+  var r={
+    trips:S.trips.length, km:0, min:0, night:0,
+    fuelEntries:S.fuels.length, fuelL:0, fuelCost:0,
+    maintCost:0, grandTotal:0, longest:0, noCheck:0, caps:{}, months:{}
+  };
+
+  S.fuels.forEach(function(f){
+    var fl=num(f.litres)||0, fc=num(f.cost)||0;
+    r.fuelL+=fl;
+    r.fuelCost+=fc;
+    var mKey=(f.date||"").slice(0,7);
+    if(mKey){
+      var mb=r.months[mKey]||(r.months[mKey]={km:0,fuelL:0,fuelCost:0,maintCost:0,total:0});
+      mb.fuelL+=fl; mb.fuelCost+=fc; mb.total+=fc;
+    }
+  });
+
+  S.snags.forEach(function(s){
+    var sc=num(s.cost)||0;
+    r.maintCost+=sc;
+    var mKey=(s.closed||s.date||"").slice(0,7);
+    if(mKey && sc>0){
+      var mb=r.months[mKey]||(r.months[mKey]={km:0,fuelL:0,fuelCost:0,maintCost:0,total:0});
+      mb.maintCost+=sc; mb.total+=sc;
+    }
+  });
+
+  r.grandTotal = r.fuelCost + r.maintCost;
+
+  // Tank-to-Tank Efficiency
+  var effData = computeFuelEfficiencyMap();
+  r.fuelEffMap = effData.map;
+  r.fuelEffPoints = effData.points;
+
+  var totalTankDist = 0, totalTankL = 0;
+  var sortedFuelsWithOdo = S.fuels.filter(function(f){return isNum(f.odo)}).sort(function(a,b){return a.odo-b.odo});
+  for(var i=1; i<sortedFuelsWithOdo.length; i++){
+    var d = sortedFuelsWithOdo[i].odo - sortedFuelsWithOdo[i-1].odo;
+    var l = num(sortedFuelsWithOdo[i].litres);
+    if(d > 0 && l > 0 && d < 1200){
+      totalTankDist += d;
+      totalTankL += l;
+    }
+  }
+  var rawEff = (totalTankL > 0 && totalTankDist > 0) ? (totalTankDist / totalTankL) : 11.8;
+  r.eff = (rawEff >= 6 && rawEff <= 25) ? rawEff : 11.8;
+
+  // Latest valid Fuel Price per Litre (PKR/L)
+  var sortedFuels = S.fuels.slice().sort(sortFuels);
+  var latestPpl = null;
+  for(var j=0; j<sortedFuels.length; j++){
+    var p = num(sortedFuels[j].ppl);
+    if(!p && num(sortedFuels[j].cost) > 0 && num(sortedFuels[j].litres) > 0){
+      p = num(sortedFuels[j].cost) / num(sortedFuels[j].litres);
+    }
+    if(p && p >= 150 && p <= 600){
+      latestPpl = p;
+      break;
+    }
+  }
+  r.latestPpl = latestPpl || 330;
+  r.estTripPerKm = r.latestPpl / r.eff;
+
+  // Trips stats (context-aware fuel estimate)
+  var totalTripsEstFuel = 0;
+  S.trips.forEach(function(t){
+    var km=tripKm(t), mn=tripDriveMin(t);
+    r.km+=km; r.min+=mn;
+    if(t.dn==="Night")r.night+=mn;
+    if(km>r.longest)r.longest=km;
+    if(t.preCheck==="N")r.noCheck++;
+    var tEff = tripEffectiveKmPerL(t.purpose, t.road, r.eff);
+    totalTripsEstFuel += (km / tEff) * r.latestPpl;
+
+    var c=(t.captain||"").trim();
+    if(c){
+      var o=r.caps[c]||(r.caps[c]={trips:0,km:0,min:0,night:0});
+      o.trips++;o.km+=km;o.min+=mn;if(t.dn==="Night")o.night+=mn;
+    }
+    var mKey=(t.date||"").slice(0,7);
+    if(mKey){
+      var mb=r.months[mKey]||(r.months[mKey]={km:0,fuelL:0,fuelCost:0,maintCost:0,total:0});
+      mb.km+=km;
+    }
+  });
+  r.totalTripsEstFuel = Math.round(totalTripsEstFuel);
+
+  // Lifetime CPK
+  var totalOdoSpan = Math.max(0, curOdo() - (num(S.cfg.startOdo)||198992));
+  var effectiveKm = Math.max(totalOdoSpan, r.km);
+  r.fuelPerKm = effectiveKm > 0 ? r.fuelCost / effectiveKm : r.estTripPerKm;
+  r.maintPerKm = effectiveKm > 0 ? r.maintCost / effectiveKm : null;
+  r.totalPerKm = effectiveKm > 0 ? r.grandTotal / effectiveKm : null;
+
+  // Estimated range remaining in current tank
+  var latestFuelWithLitres = sortedFuels.find(function(f){return num(f.litres) > 0});
+  var lastFillLitres = latestFuelWithLitres ? num(latestFuelWithLitres.litres) : 30;
+  r.estRange = Math.round(lastFillLitres * r.eff);
+
+  return r;
+}
+
+function grounded(){return S.snags.some(function(s){return s.severity==="NO-GO (Grounded)"&&s.status!=="Closed"})}
+
+function maintInfo(m){
+  var km=num(m.km)||0,mo=num(m.months)||0,remKm=null,remDays=null,dueOdo=null,dueDate=null,pct=0;
+  var cur = curOdo();
+  if(km>0&&isNum(m.lastOdo)){
+    dueOdo=m.lastOdo+km;
+    remKm=dueOdo-cur;
+    var used = cur - m.lastOdo;
+    pct = Math.min(100, Math.max(0, Math.round((used / km) * 100)));
+  }
+  if(mo>0&&m.lastDate){
+    var d=parseISO(m.lastDate);
+    d.setMonth(d.getMonth()+mo);
+    dueDate=d;
+    remDays=Math.round((d-startOfToday())/864e5);
+  }
+  var st="NONE";
+  if(remKm!==null||remDays!==null){
+    if((remKm!==null&&remKm<0)||(remDays!==null&&remDays<0))st="OVERDUE";
+    else if((remKm!==null&&remKm<500)||(remDays!==null&&remDays<30))st="DUE SOON";
+    else st="OK";
+  }
+  return {remKm:remKm,remDays:remDays,dueOdo:dueOdo,dueDate:dueDate,status:st,pct:pct};
+}
+function dateInfo(iso){if(!iso)return null;return Math.round((parseISO(iso)-startOfToday())/864e5)}
+
+var toastT;
+function toast(msg){var t=$("#toast");t.textContent=msg;t.hidden=false;clearTimeout(toastT);toastT=setTimeout(function(){t.hidden=true},2600)}
+function opts(list,sel){return list.map(function(x){return '<option'+(x===sel?' selected':'')+'>'+esc(x)+'</option>'}).join("")}
+function lsGet(k){try{return localStorage.getItem(k)}catch(e){return null}}
+function lsSet(k,v){try{localStorage.setItem(k,v)}catch(e){}}
+function errText(e){return (e&&(e.message||e.code))||"Unknown error"}
+function arm(btn,label,fn){
+  if(btn.dataset.arm==="1"){fn();return}
+  btn.dataset.arm="1";btn.dataset.label=btn.textContent;btn.textContent=label;
+  setTimeout(function(){if(btn.isConnected){btn.dataset.arm="";btn.textContent=btn.dataset.label}},4000);
+}
+function sortTrips(a,b){return (b.date||"").localeCompare(a.date||"")||((b.n||0)-(a.n||0))||((b.createdAt||0)-(a.createdAt||0))}
+function sortFuels(a,b){return (b.date||"").localeCompare(a.date||"")||((b.odo||0)-(a.odo||0))||((b.n||0)-(a.n||0))||((b.createdAt||0)-(a.createdAt||0))}
+
+function tile(k, v, u) {
+  return '<div class="tile"><div class="k">' + k + '</div><div class="v">' + v + (u ? '<small>' + u + '</small>' : '') + '</div></div>';
+}
+function sevPill(s) {
+  var c = s === "NO-GO (Grounded)" ? "bad" : s === "Fix Soon" ? "warn" : "";
+  return '<span class="pill ' + c + '">' + esc(s || "") + '</span>';
+}
+function stPill(s) {
+  var c = s === "Open" ? "bad" : s === "Deferred" ? "warn" : s === "Closed" ? "good" : "";
+  return '<span class="pill ' + c + '">' + esc(s || "") + '</span>';
+}
+
+function renderMast(){
+  var c=S.cfg||{};
+  $("#mast-plate").textContent=c.reg?String(c.reg).toUpperCase():"REG ----";
+  var mm=[c.make,c.model].filter(Boolean).join(" ");
+  $("#mast-sub").textContent=mm||"Captain's flight log for the car";
+}
+
+/* ==========================================================================
+   SVG CHARTS (ZERO EXTERNAL LIBRARIES)
+   ========================================================================== */
+function renderMonthlySpendChart(monthsObj){
+  var keys = Object.keys(monthsObj).sort().slice(-8);
+  if(keys.length < 2) return "";
+  var maxVal = 1;
+  keys.forEach(function(k){
+    var tot = (monthsObj[k].fuelCost || 0) + (monthsObj[k].maintCost || 0);
+    if(tot > maxVal) maxVal = tot;
+  });
+
+  var w = 600, h = 150, padB = 24, padT = 14, chartH = h - padB - padT;
+  var colW = w / keys.length;
+  var barW = Math.min(38, colW * 0.56);
+
+  var svg = '<svg class="chart-svg" viewBox="0 0 '+w+' '+h+'" role="img" aria-label="Monthly Spend Chart">';
+  [0.5, 1].forEach(function(frac){
+    var y = padT + chartH * (1 - frac);
+    svg += '<line x1="0" y1="'+y+'" x2="'+w+'" y2="'+y+'" stroke="var(--line)" stroke-dasharray="3,3" stroke-width="1"/>';
+    svg += '<text x="2" y="'+(y-3)+'" fill="var(--muted)" font-size="9" font-family="var(--f-data)">PKR '+Math.round((maxVal*frac)/1000)+'k</text>';
+  });
+
+  keys.forEach(function(k, idx){
+    var m = monthsObj[k];
+    var fCost = m.fuelCost || 0;
+    var mCost = m.maintCost || 0;
+    var fH = (fCost / maxVal) * chartH;
+    var mH = (mCost / maxVal) * chartH;
+    var x = idx * colW + (colW - barW) / 2;
+    var yFuel = padT + chartH - fH;
+    var yMaint = yFuel - mH;
+
+    if(fH > 0) svg += '<rect x="'+x+'" y="'+yFuel+'" width="'+barW+'" height="'+fH+'" rx="2" fill="var(--chart-fuel)"/>';
+    if(mH > 0) svg += '<rect x="'+x+'" y="'+yMaint+'" width="'+barW+'" height="'+mH+'" rx="2" fill="var(--chart-maint)"/>';
+    svg += '<text x="'+(x + barW/2)+'" y="'+(h - 6)+'" text-anchor="middle" fill="var(--muted)" font-size="10" font-family="var(--f-data)">'+k.slice(2)+'</text>';
+  });
+  svg += '</svg>';
+  return svg;
+}
+
+function renderEfficiencyTrendChart(points){
+  if(!points || points.length < 2) return "";
+  var pts = points.slice(-12);
+  var minY = 6, maxY = 18;
+  pts.forEach(function(p){
+    if(p.kml < minY) minY = Math.floor(p.kml - 1);
+    if(p.kml > maxY) maxY = Math.ceil(p.kml + 1);
+  });
+
+  var w = 600, h = 135, padL = 28, padR = 14, padT = 16, padB = 22;
+  var plotW = w - padL - padR, plotH = h - padT - padB;
+
+  var coords = pts.map(function(p, idx){
+    var x = padL + (pts.length === 1 ? plotW/2 : (idx / (pts.length - 1)) * plotW);
+    var y = padT + plotH - ((p.kml - minY) / (maxY - minY)) * plotH;
+    return { x: x, y: y, kml: p.kml, label: p.label };
+  });
+
+  var poly = coords.map(function(c){ return c.x.toFixed(1)+","+c.y.toFixed(1); }).join(" ");
+  var svg = '<svg class="chart-svg" viewBox="0 0 '+w+' '+h+'" role="img" aria-label="Fuel Economy Trend">';
+
+  [10, 14].forEach(function(ref){
+    if(ref >= minY && ref <= maxY){
+      var ry = padT + plotH - ((ref - minY) / (maxY - minY)) * plotH;
+      svg += '<line x1="'+padL+'" y1="'+ry+'" x2="'+(w-padR)+'" y2="'+ry+'" stroke="var(--line)" stroke-dasharray="3,3" stroke-width="1"/>';
+      svg += '<text x="0" y="'+(ry+3)+'" fill="var(--muted)" font-size="9" font-family="var(--f-data)">'+ref+'</text>';
+    }
+  });
+
+  svg += '<polyline fill="none" stroke="var(--good)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" points="'+poly+'"/>';
+  coords.forEach(function(c){
+    var dotColor = c.kml >= 12 ? "var(--good)" : c.kml >= 10 ? "var(--warn)" : "var(--bad)";
+    svg += '<circle cx="'+c.x+'" cy="'+c.y+'" r="4" fill="'+dotColor+'" stroke="var(--surface)" stroke-width="1.5"/>';
+    svg += '<text x="'+c.x+'" y="'+(c.y - 7)+'" text-anchor="middle" fill="var(--ink)" font-size="9" font-weight="600" font-family="var(--f-data)">'+c.kml.toFixed(1)+'</text>';
+    svg += '<text x="'+c.x+'" y="'+(h - 5)+'" text-anchor="middle" fill="var(--muted)" font-size="9" font-family="var(--f-data)">'+esc(c.label)+'</text>';
+  });
+  svg += '</svg>';
+  return svg;
+}
+
+/* ==========================================================================
+   TAB 1: SUMMARY / DASHBOARD & FINANCIAL INTELLIGENCE
+   ========================================================================== */
+function renderDash(){
+  var el=$("#v-dash");
+  var st=stats(),g=grounded(),odo=curOdo(),h="";
+  
+  h+='<div class="band '+(g?'nogo':'ok')+'"><div><div class="lbl">Vehicle status</div><div class="big">'+(g?'Grounded':'Serviceable')+'</div></div>'+
+     '<div class="odo"><b>'+fmtInt(odo)+'</b><span>odometer, km</span></div></div>';
+
+  h+='<div class="band range">'+
+       '<div><div class="lbl">Estimated Tank Range & Economy</div>'+
+       '<div class="big" style="color:#2563EB">~'+fmtInt(st.estRange)+' km</div></div>'+
+       '<div class="odo"><b style="color:#2563EB">'+fmtDec(st.eff,1)+' km/L</b><span>Avg Efficiency (Tank-to-Tank)</span></div>'+
+     '</div>';
+
+  var al=[];
+  S.snags.filter(function(s){return s.severity==="NO-GO (Grounded)"&&s.status!=="Closed"}).forEach(function(s){al.push(['bad','NO-GO issue #'+s.n+': '+esc(s.desc||s.system)])});
+  S.maint.forEach(function(m){var i=maintInfo(m);if(i.status==="OVERDUE")al.push(['bad',esc(m.name)+' is overdue ('+fmtInt(-i.remKm)+' km over)']);else if(i.status==="DUE SOON")al.push(['warn',esc(m.name)+' due soon ('+fmtInt(i.remKm)+' km left)'])});
+  [["Insurance",S.cfg.insExpiry],["Registration / token tax",S.cfg.taxDue]].forEach(function(p){
+    var d=dateInfo(p[1]);if(d===null)return;
+    if(d<0)al.push(['bad',p[0]+' expired '+fmtDate(p[1])]);else if(d<30)al.push(['warn',p[0]+' expires '+fmtDate(p[1])+' ('+d+' days)']);
+  });
+  S.snags.filter(function(s){return s.status==="Open"&&s.severity!=="NO-GO (Grounded)"}).slice(0,3).forEach(function(s){al.push(['warn','Open defect #'+s.n+': '+esc(s.desc||s.system)])});
+  h+='<div><h2>Vehicle Health Alerts</h2><div class="list">'+(al.length?al.map(function(a){return '<div class="alert '+a[0]+'">'+a[1]+'</div>'}).join(""):'<div class="alert good">All critical vehicle systems operational.</div>')+'</div></div>';
+
+  h+='<div><h2>True Cost of Ownership & Monthly Spend</h2><div class="card spend-bar-wrap">';
+  var fuelPct = st.grandTotal > 0 ? (st.fuelCost / st.grandTotal * 100) : 50;
+  var maintPct = st.grandTotal > 0 ? (st.maintCost / st.grandTotal * 100) : 50;
+  
+  h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">'+
+       '<span style="font-size:12px;text-transform:uppercase;font-weight:600;color:var(--muted)">Lifetime Spend Split</span>'+
+       '<span><b>PKR '+fmtInt(st.grandTotal)+'</b> <small style="color:var(--muted)">Total Spent</small></span>'+
+     '</div>';
+
+  h+='<div class="spend-bar">'+
+       (st.fuelCost>0?'<div class="spend-seg spend-fuel" style="width:'+fuelPct.toFixed(1)+'%">'+fuelPct.toFixed(0)+'% Fuel</div>':'')+
+       (st.maintCost>0?'<div class="spend-seg spend-maint" style="width:'+maintPct.toFixed(1)+'%">'+maintPct.toFixed(0)+'% Repairs</div>':'')+
+     '</div>';
+
+  h+='<div class="spend-legend" style="margin-top:4px">'+
+       '<div class="spend-leg-item"><span class="spend-dot" style="background:var(--chart-fuel)"></span><b>Fuel:</b> PKR '+fmtInt(st.fuelCost)+' ('+fmtDec(st.fuelL,1)+' L)</div>'+
+       '<div class="spend-leg-item"><span class="spend-dot" style="background:var(--chart-maint)"></span><b>Repairs:</b> PKR '+fmtInt(st.maintCost)+'</div>'+
+     '</div>';
+
+  var spendChart = renderMonthlySpendChart(st.months);
+  if(spendChart){
+    h+='<div style="border-top:1px solid var(--line);padding-top:10px;margin-top:4px">'+spendChart+'</div>';
+  }
+  h+='</div></div>';
+
+  h+='<div><h2>Operating Totals & Running CPK</h2><div class="tiles">'+
+    tile("True CPK (TCO)",fmtDec(st.totalPerKm,2),"PKR/km")+
+    tile("Fuel CPK",fmtDec(st.fuelPerKm,2),"PKR/km")+
+    tile("Maint CPK",fmtDec(st.maintPerKm,2),"PKR/km")+
+    tile("Avg Consumption",fmtDec(st.eff,1),"km/L")+
+    tile("Total Fuel Spent",fmtInt(st.fuelCost),"PKR")+
+    tile("Total Maint Spent",fmtInt(st.maintCost),"PKR")+
+    tile("Refuel Entries",fmtInt(st.fuelEntries),"")+
+    tile("Trips Logged",fmtInt(st.trips),"")+
+    '</div></div>';
+
+  if(S.trips.length > 0){
+    var recentTrips = S.trips.slice().sort(sortTrips).slice(0, 3);
+    h+='<div><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'+
+         '<h2>Recent Trips</h2>'+
+         '<button class="btn small" data-act="goto" data-tab="trip" style="padding:0 8px;min-height:28px">View all '+S.trips.length+'</button>'+
+       '</div><div class="list">'+recentTrips.map(function(t){return tripCard(t, st)}).join("")+'</div></div>';
+  }
+
+  var mKeys = Object.keys(st.months).sort().reverse();
+  if(mKeys.length > 0){
+    h+='<div><h2>Monthly Summary Report</h2><div class="card tbl-wrap"><table>'+
+       '<thead><tr><th>Month</th><th class="n">km</th><th class="n">Fuel (L)</th><th class="n">Fuel Cost</th><th class="n">Maint Cost</th><th class="n">Total Spend</th></tr></thead><tbody>'+
+       mKeys.map(function(k){
+         var m=st.months[k];
+         return '<tr><td><b>'+k+'</b></td><td class="n">'+fmtInt(m.km)+'</td><td class="n">'+fmtDec(m.fuelL,1)+'</td><td class="n">'+fmtInt(m.fuelCost)+'</td><td class="n">'+fmtInt(m.maintCost)+'</td><td class="n"><b>PKR '+fmtInt(m.total)+'</b></td></tr>';
+       }).join("")+
+       '</tbody></table></div></div>';
+  }
+
+  el.innerHTML=h;
+}
+
+/* ==========================================================================
+   TAB 2: DEDICATED FUEL LOG, EFFICIENCY CHART, PUMP AUDIT & EDITING
+   ========================================================================== */
+function renderFuelPage(){
+  var el=$("#v-fuel");
+  var st=stats(), h="";
+
+  h+='<div class="band highlight">'+
+       '<div><div class="lbl">Total Fuel Cost (All Records)</div>'+
+       '<div class="big" style="color:var(--accent)">PKR '+fmtInt(st.fuelCost)+'</div></div>'+
+       '<div class="odo"><b>'+fmtDec(st.fuelL,1)+' L</b><span>'+st.fuelEntries+' refuelings &middot; ~'+fmtDec(st.eff,1)+' km/L</span></div>'+
+     '</div>';
+
+  var effChart = renderEfficiencyTrendChart(st.fuelEffPoints);
+  if(effChart){
+    h+='<div><h2>Tank-to-Tank Fuel Efficiency Trend (km/L)</h2><div class="card">'+effChart+'</div></div>';
+  }
+
+  h+='<details class="add" id="fuel-add"><summary class="btn primary">Add Refueling Entry</summary>'+
+    '<form class="form card" id="f-entry-form" style="margin-top:10px" novalidate>'+
+    '<label class="ocr-box" style="display:block">'+
+      '<span style="font-size:18px">📷</span> <b>Snap / Upload Fuel Receipt (Auto-Fill)</b>'+
+      '<div style="font-size:11px;color:var(--muted);margin-top:2px" id="fe-ocr-status">Tap to scan fuel pump slip or meter screen</div>'+
+      '<input type="file" id="fe-ocr-file" accept="image/*" onchange="handleReceiptScan(this)">'+
+    '</label>'+
+    '<div class="grid2">'+
+      '<label class="fld"><span>Date Refueled</span><input type="date" id="fe-date" value="'+todayISO()+'" required></label>'+
+      '<label class="fld"><span>Odometer (km)</span><input type="number" id="fe-odo" value="'+(curOdo()||"")+'" inputmode="numeric" placeholder="e.g. 205000" required></label>'+
+    '</div>'+
+    '<div class="grid2">'+
+      '<label class="fld"><span>Fuel Volume (Litres)</span><input type="number" id="fe-litres" inputmode="decimal" step="0.01" placeholder="e.g. 35.5" required></label>'+
+      '<label class="fld"><span>Total Cost (PKR)</span><input type="number" id="fe-cost" inputmode="numeric" step="1" placeholder="e.g. 9500" required></label>'+
+    '</div>'+
+    '<div class="grid3">'+
+      '<label class="fld"><span>Rate / Litre (PKR)</span><input type="text" id="fe-ppl" placeholder="e.g. 330.0" style="font-family:var(--f-data);background:var(--surface-2)"></label>'+
+      '<label class="fld"><span>Payment Method</span><select id="fe-pay"><option value="Cash">Cash</option><option value="Card">Card</option><option value="Online / App">Online / App</option></select></label>'+
+      '<label class="fld"><span>Fuel Pump / Station</span><input type="text" id="fe-station" placeholder="e.g. Shell, Total, PSO"></label>'+
+    '</div>'+
+    '<div class="fld"><span class="lab">Tank Refill Status</span>'+
+      '<div class="seg" role="radiogroup">'+
+        '<label><input type="radio" name="fe-tank" value="full" checked><span>Full Tank (Calculates km/L)</span></label>'+
+        '<label><input type="radio" name="fe-tank" value="partial"><span>Partial Fill</span></label>'+
+      '</div></div>'+
+    '<label class="fld"><span>Notes / Remarks</span><input type="text" id="fe-notes" placeholder="Optional notes"></label>'+
+    '<div class="err" id="fe-err" role="alert" hidden></div>'+
+    '<button class="btn primary" type="submit" id="fe-save">Save Fuel Entry</button>'+
+    '</form></details>';
+
+  var q = (S.filter.fuelQ || "").toLowerCase();
+  var filtered = S.fuels.slice().sort(sortFuels).filter(function(f){
+    if(!q) return true;
+    return [f.date, f.station, f.remarks, f.payMode, f.odo, f.cost].join(" ").toLowerCase().indexOf(q) !== -1;
+  });
+
+  h+='<div><h2>Refueling History ('+filtered.length+' of '+S.fuels.length+')</h2>'+
+     '<div class="filter-bar"><input type="text" placeholder="Search date, station, remarks, odometer..." value="'+esc(S.filter.fuelQ)+'" oninput="setFilter(\'fuelQ\', this.value)"></div>';
+
+  if(!filtered.length){
+    h+='<div class="empty"><p>No matching fuel entries.</p></div>';
+  } else {
+    h+='<div class="list">'+filtered.map(function(f){return fuelCard(f, st)}).join("")+'</div>';
+  }
+  h+='</div>';
+
+  el.innerHTML=h;
+  setupFuelInputListeners();
+}
+
+function fuelCard(f, st){
+  var key = f.id || ("n_"+f.n);
+  var effObj = st && st.fuelEffMap ? st.fuelEffMap[key] : null;
+  var tankCap = num(S.cfg.tankCap) || 42;
+  var litres = num(f.litres) || 0;
+  var tankAlert = litres > (tankCap - 1.5) ? '<span class="pill warn" style="font-size:10px">⚠ '+fmtDec(litres,1)+'L / '+tankCap+'L Tank</span>' : '';
+
+  var effPill = "";
+  if(effObj){
+    var cls = effObj.kml >= 12 ? "good" : effObj.kml >= 10 ? "warn" : "bad";
+    effPill = '<span class="pill '+cls+'" style="font-size:10px">'+fmtDec(effObj.kml,1)+' km/L ('+fmtInt(effObj.dist)+' km)</span>';
+  }
+
+  var ed = S.editFuel === f.id, dr = S.fuelDraft;
+  var h = '<div class="item" style="border-left:4px solid var(--accent)">'+
+    '<div class="top">'+
+      '<div style="min-width:0">'+
+        '<div class="ttl" style="font-size:16px;color:var(--accent)"><b>'+fmtDec(f.litres,2)+' Litres &middot; PKR '+fmtInt(f.cost)+'</b></div>'+
+        '<div class="meta">'+fmtDate(f.date)+(f.odo?' &middot; <b>Meter:</b> '+fmtInt(f.odo)+' km':'')+(f.ppl?' &middot; PKR '+f.ppl+'/L':'')+'</div>'+
+        '<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:6px">'+
+          (f.isFull?'<span class="pill good" style="font-size:10px">Full Tank</span>':'')+
+          effPill+
+          tankAlert+
+          (f.station?'<span class="pill" style="font-size:10px">'+esc(f.station)+'</span>':'')+
+        '</div>'+
+      '</div>'+
+      '<div class="num">#'+(f.n||"")+'</div>'+
+    '</div>'+
+    (f.remarks?'<div class="meta" style="margin-top:6px">'+esc(f.remarks)+'</div>':'');
+
+  if(ed && f.id){
+    h+='<div class="form" style="margin-top:10px;border-top:1px solid var(--line);padding-top:10px">'+
+      '<div class="grid2"><label class="fld"><span>Date</span><input type="date" data-fd="date" value="'+esc(dr.date!=null?dr.date:(f.date||""))+'"></label>'+
+      '<label class="fld"><span>Odometer (km)</span><input type="number" inputmode="numeric" data-fd="odo" value="'+esc(dr.odo!=null?dr.odo:(isNum(f.odo)?f.odo:""))+'"></label></div>'+
+      '<div class="grid2"><label class="fld"><span>Litres</span><input type="number" step="0.01" inputmode="decimal" data-fd="litres" value="'+esc(dr.litres!=null?dr.litres:(f.litres||""))+'"></label>'+
+      '<label class="fld"><span>Total Cost (PKR)</span><input type="number" inputmode="numeric" data-fd="cost" value="'+esc(dr.cost!=null?dr.cost:(f.cost||""))+'"></label></div>'+
+      '<label class="fld"><span>Remarks</span><input type="text" data-fd="remarks" value="'+esc(dr.remarks!=null?dr.remarks:(f.remarks||""))+'"></label>'+
+      '<div class="btns"><button class="btn small primary" data-act="fuel-save-edit" data-id="'+esc(f.id)+'">Save Changes</button><button class="btn small" data-act="fuel-cancel-edit">Cancel</button></div></div>';
+  } else if(f.id) {
+    h+='<div class="btns" style="margin-top:8px">'+
+      '<button class="btn small" data-act="fuel-edit" data-id="'+esc(f.id)+'">Edit</button>'+
+      '<button class="btn small danger" data-act="del-fuel" data-id="'+esc(f.id)+'">Delete</button>'+
+    '</div>';
+  }
+  return h+'</div>';
+}
+
+function setupFuelInputListeners(){
+  var fl=$("#fe-litres"), fc=$("#fe-cost"), fp=$("#fe-ppl");
+  if(!fl||!fc||!fp) return;
+  fl.addEventListener("input", function(){
+    var l=num(fl.value), c=num(fc.value), p=num(fp.value);
+    if(l>0 && c>0){ fp.value=(c/l).toFixed(2); }
+    else if(l>0 && p>0){ fc.value=Math.round(l*p); }
+  });
+  fc.addEventListener("input", function(){
+    var l=num(fl.value), c=num(fc.value);
+    if(l>0 && c>0){ fp.value=(c/l).toFixed(2); }
+  });
+  fp.addEventListener("input", function(){
+    var l=num(fl.value), p=num(fp.value);
+    if(l>0 && p>0){ fc.value=Math.round(l*p); }
+  });
+
+  var form=$("#f-entry-form");
+  if(form){
+    form.addEventListener("submit",function(ev){
+      ev.preventDefault();
+      saveFuelEntry();
+    });
+  }
+}
+
+window.handleReceiptScan = async function(input){
+  var file = input.files && input.files[0];
+  if(!file) return;
+  var status = $("#fe-ocr-status");
+  status.innerHTML = '<span style="color:var(--accent)">Analyzing receipt image with OCR...</span>';
+  try {
+    if(typeof Tesseract === "undefined") throw new Error("OCR engine loading... please retry.");
+    var res = await Tesseract.recognize(file, 'eng');
+    var text = res.data.text || "";
+    var costMatch = text.match(/(?:Rs\.?|PKR|Total|Amount)?\s*[:=]?\s*([1-9][0-9]{3,5}(?:\.[0-9]+)?)/i);
+    var litreMatch = text.match(/([1-9][0-9]?(?:\.[0-9]{1,3})?)\s*(?:L|Ltr|Litres|Volume)/i);
+    var rateMatch = text.match(/(?:Rate|Price|PPL)\s*[:=]?\s*([1-3][0-9]{2}(?:\.[0-9]+)?)/i);
+    if(costMatch) $("#fe-cost").value = Math.round(parseFloat(costMatch[1]));
+    if(litreMatch) $("#fe-litres").value = parseFloat(litreMatch[1]);
+    if(rateMatch) $("#fe-ppl").value = parseFloat(rateMatch[1]);
+    status.innerHTML = '<span style="color:var(--good)">✓ Receipt details scanned & filled!</span>';
+    toast("Receipt scanned successfully");
+  } catch(e) {
+    status.innerHTML = '<span style="color:var(--bad)">OCR Notice: ' + esc(errText(e)) + '</span>';
+  }
+};
+
+async function saveFuelEntry(){
+  if(!db){showErr("#fe-err","Storage is not available.");return}
+  var date=$("#fe-date").value, odo=num($("#fe-odo").value);
+  var litres=num($("#fe-litres").value), cost=num($("#fe-cost").value);
+  var isFull=$('input[name=fe-tank]:checked').value === "full";
+  if(!date) return showErr("#fe-err","Enter the date of refueling.");
+  if(odo==null) return showErr("#fe-err","Enter the meter / odometer reading.");
+  if(!litres||litres<=0) return showErr("#fe-err","Enter litres added.");
+  if(!cost||cost<=0) return showErr("#fe-err","Enter total cost in PKR.");
+  showErr("#fe-err","");
+
+  var btn=$("#fe-save"); btn.disabled=true;
+  var n=S.fuels.reduce(function(m,f){return Math.max(m,f.n||0)},0)+1;
+  var ppl=(cost/litres).toFixed(2);
+
+  var docData={
+    n:n, date:date, odo:odo, litres:litres, cost:cost, ppl:ppl, isFull:isFull,
+    payMode:$("#fe-pay").value, station:$("#fe-station").value.trim(),
+    remarks:$("#fe-notes").value.trim(), createdAt:Date.now()
+  };
+
+  try{
+    await db.collection("fuels").add(docData);
+    toast("Refueling entry added (PKR "+fmtInt(cost)+")");
+    $("#fe-litres").value=""; $("#fe-cost").value=""; $("#fe-ppl").value=""; $("#fe-notes").value="";
+    $("#fe-odo").value=odo;
+  }catch(e){
+    showErr("#fe-err","Could not save fuel entry: "+errText(e));
+  }finally{
+    btn.disabled=false;
+  }
+}
+
+/* ==========================================================================
+   TAB 3: TRIPS LOG, STOP-TIME SPEED, HIGHWAY VS CITY FUEL & INLINE EDIT
+   ========================================================================== */
+var tripDirty={odo:false,dn:false};
+function fillSelect(id,list,sel){$(id).innerHTML=opts(list,sel)}
+
+window.setTimeNow = function(id){
+  var d=new Date();
+  $(id).value = pad(d.getHours()) + ":" + pad(d.getMinutes());
+  calc();
+};
+
+window.applyPreset = function(type){
+  var presets = {
+    commute: { from: "Home", to: "Office", purpose: "Commute", via: "Shahrah-e-Faisal", road: "Congested" },
+    airport: { from: "Home", to: "Jinnah International Airport", purpose: "Family", via: "Airport Road", road: "Dry" },
+    grocery: { from: "Home", to: "Supermarket / Market", purpose: "Errand", via: "Local", road: "Dry" },
+    highway: { from: "Karachi Toll Plaza", to: "Hyderabad / M9", purpose: "Long Trip", via: "M9 Motorway", road: "Highway" }
+  };
+  var p = presets[type];
+  if(!p) return;
+  $("#t-from").value = p.from;
+  $("#t-to").value = p.to;
+  $("#t-purpose").value = p.purpose;
+  $("#t-via").value = p.via;
+  $("#t-road").value = p.road;
+  prefillTrip();
+  toast("Preset loaded: " + p.from + " ➔ " + p.to);
+};
+
+function initTripForm(){
+  fillSelect("#t-purpose",LISTS.purpose);fillSelect("#t-weather",LISTS.weather);fillSelect("#t-road",LISTS.road);
+  fillSelect("#t-snag-sys",LISTS.system);fillSelect("#t-snag-sev",LISTS.severity,"Fix Soon");
+  $("#t-date").value=todayISO();
+  $("#t-captain").value=lsGet("tl_cap")||"";
+
+  $("#t-odo-out").addEventListener("input",function(){tripDirty.odo=true;calc()});
+  $("#t-odo-in").addEventListener("input",calc);
+  $("#t-stop").addEventListener("input",calc);
+  $("#t-purpose").addEventListener("change",calc);
+  $("#t-road").addEventListener("change",calc);
+  ["#t-dep","#t-arr"].forEach(function(s){$(s).addEventListener("input",calc)});
+  
+  $("#t-dep").addEventListener("input",function(){
+    if(tripDirty.dn)return;var m=toMin($("#t-dep").value);if(m==null)return;
+    var night=m<6*60||m>=18*60;$$('input[name=dn]').forEach(function(r){r.checked=r.value===(night?"Night":"Day")});
+  });
+  $$('input[name=dn]').forEach(function(r){r.addEventListener("change",function(){tripDirty.dn=true})});
+  $$('input[name=snag]').forEach(function(r){r.addEventListener("change",function(){$("#t-snag-box").hidden=radio("snag")!=="Y"})});
+
+  $("#trip-form").addEventListener("submit",function(e){e.preventDefault();saveTrip()});
+}
+
+function radio(name){var r=$('input[name='+name+']:checked');return r?r.value:""}
+
+function prefillTrip(){
+  var o = curOdo();
+  var odoOutEl = $("#t-odo-out");
+  if(odoOutEl && o > 0){
+    odoOutEl.value = o;
+    calc();
+  }
+}
+
+function calc(){
+  var o1=num($("#t-odo-out").value),o2=num($("#t-odo-in").value),km=o1!=null&&o2!=null?o2-o1:null;
+  var a=toMin($("#t-dep").value),b=toMin($("#t-arr").value),elapsed=a!=null&&b!=null?((b-a)%1440+1440)%1440:null;
+  var stopMin = num($("#t-stop").value) || 0;
+  var driveMin = elapsed != null ? Math.max(0, elapsed - stopMin) : null;
+
+  var st = stats();
+  var purpose = $("#t-purpose") ? $("#t-purpose").value : "Commute";
+  var road = $("#t-road") ? $("#t-road").value : "Dry";
+  var effKmL = tripEffectiveKmPerL(purpose, road, st.eff);
+  var fuelCostEst = (km!=null && km>0) ? Math.round((km / effKmL) * st.latestPpl) : null;
+
+  $("#c-dist").textContent=km!=null&&km>=0?fmtInt(km)+" km":"-";
+  $("#c-block").textContent=driveMin!=null&&driveMin>0?fmtHM(driveMin):"-";
+  $("#c-speed").textContent=km!=null&&km>=0&&driveMin>0?fmtDec(km/(driveMin/60),0):"-";
+  $("#c-eff-lbl").textContent="Fuel (@"+effKmL.toFixed(1)+"km/L)";
+  $("#c-eff").textContent=fuelCostEst!=null?"PKR "+fmtInt(fuelCostEst):"-";
+}
+function showErr(id,msg){var e=$(id);if(!e)return;e.textContent=msg;e.hidden=!msg}
+
+function renderTripsPage(){
+  var banner = $("#trip-stats-banner");
+  var history = $("#trip-history-section");
+  if(!banner || !history) return;
+
+  var st = stats();
+  banner.innerHTML = '<div class="tiles" style="grid-template-columns:repeat(4,minmax(0,1fr));margin-bottom:12px">'+
+    tile("Trips", fmtInt(st.trips), "")+
+    tile("Distance", fmtInt(st.km), "km")+
+    tile("Drive Time", fmtHM(st.min), "")+
+    tile("Est. Fuel", fmtInt(st.totalTripsEstFuel), "PKR")+
+  '</div>';
+
+  var q = (S.filter.tripQ || "").toLowerCase();
+  var pFilt = S.filter.tripPurp || "";
+  var filtered = S.trips.slice().sort(sortTrips).filter(function(t){
+    if(pFilt && t.purpose !== pFilt) return false;
+    if(!q) return true;
+    return [t.from, t.to, t.via, t.captain, t.co, t.remarks, t.date].join(" ").toLowerCase().indexOf(q) !== -1;
+  });
+
+  var h = '<div style="margin-top:16px"><h2 style="display:flex;justify-content:space-between;align-items:center">'+
+            '<span>Logged Trips ('+filtered.length+' of '+S.trips.length+')</span>'+
+            '<span style="font-size:11px;font-family:var(--f-data);color:var(--muted)">Base @ PKR '+fmtDec(st.estTripPerKm,2)+'/km</span>'+
+          '</h2>'+
+          '<div class="filter-bar">'+
+            '<input type="text" placeholder="Search route, destination, captain..." value="'+esc(S.filter.tripQ)+'" oninput="setFilter(\'tripQ\', this.value)">'+
+            '<select onchange="setFilter(\'tripPurp\', this.value)"><option value="">All Purposes</option>'+opts(LISTS.purpose, pFilt)+'</select>'+
+          '</div>';
+  
+  if(!filtered.length){
+    h += '<div class="empty"><p>No trips match your filter.</p></div>';
+  } else {
+    h += '<div class="list">' + filtered.map(function(t){return tripCard(t, st)}).join("") + '</div>';
+  }
+  h += '</div>';
+
+  history.innerHTML = h;
+}
+
+function tripCard(t, st){
+  st = st || stats();
+  var km = tripKm(t);
+  var drMin = tripDriveMin(t);
+  var stopMin = num(t.stopMin) || 0;
+  var speed = (km > 0 && drMin > 0) ? (km / (drMin / 60)).toFixed(0) : null;
+  var tEff = tripEffectiveKmPerL(t.purpose, t.road, st.eff);
+  var estFuelCost = (km > 0) ? Math.round((km / tEff) * st.latestPpl) : null;
+
+  var badges = [];
+  if(t.purpose) badges.push('<span class="pill">'+esc(t.purpose)+'</span>');
+  if(t.dn) badges.push('<span class="pill">'+esc(t.dn)+'</span>');
+  if(t.weather) badges.push('<span class="pill">'+esc(t.weather)+'</span>');
+  if(t.road) badges.push('<span class="pill">'+esc(t.road)+'</span>');
+  if(stopMin > 0) badges.push('<span class="pill info">'+fmtHM(stopMin)+' parked</span>');
+  if(t.pax) badges.push('<span class="pill">'+t.pax+' pax</span>');
+  if(t.snagRaised === "Y") badges.push('<span class="pill bad">Snag Raised</span>');
+  if(t.preCheck === "Y") badges.push('<span class="pill good">Pre-check ✓</span>');
+
+  var ed = S.editTrip === t.id, dr = S.tripDraft;
+
+  var h = '<div class="item" style="border-left:4px solid var(--ink)">'+
+    '<div class="top">'+
+      '<div style="min-width:0">'+
+        '<div class="ttl" style="font-size:16px">'+
+          '<b>'+esc(t.from)+'</b> <span style="color:var(--muted)">➔</span> <b>'+esc(t.to)+'</b>'+
+          (t.via ? '<span style="font-size:13px;color:var(--muted);font-weight:400"> (via '+esc(t.via)+')</span>' : '')+
+        '</div>'+
+        '<div class="meta" style="margin-top:3px">'+
+          '<b>'+fmtDate(t.date)+'</b>'+
+          ' &middot; <span style="font-family:var(--f-data);font-weight:600;color:var(--ink)">'+fmtInt(km)+' km</span>'+
+          (isNum(t.odoOut)&&isNum(t.odoIn) ? ' <span style="color:var(--muted)">('+fmtInt(t.odoOut)+' ➔ '+fmtInt(t.odoIn)+' km)</span>' : '')+
+        '</div>'+
+      '</div>'+
+      '<div class="num" style="font-weight:600">#'+(t.n||"")+'</div>'+
+    '</div>'+
+    '<div style="display:flex;justify-content:space-between;align-items:center;background:var(--surface-2);border-radius:6px;padding:6px 10px;margin-top:8px;font-size:13px;flex-wrap:wrap;gap:6px">'+
+      '<div><b>Captain:</b> '+esc(t.captain)+(t.co ? ' &middot; <b>Co:</b> '+esc(t.co) : '')+'</div>'+
+      '<div style="font-family:var(--f-data)">'+
+        (t.dep && t.arr ? esc(t.dep)+' - '+esc(t.arr)+' ('+fmtHM(drMin)+(stopMin>0?' drive':'')+')' : fmtHM(drMin))+
+        (speed ? ' &middot; '+speed+' km/h' : '')+
+        (estFuelCost ? ' &middot; <b style="color:var(--accent)">~PKR '+fmtInt(estFuelCost)+' fuel</b>' : '')+
+      '</div>'+
+    '</div>'+
+    (badges.length ? '<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:8px">'+badges.join("")+'</div>' : '')+
+    (t.remarks ? '<div class="meta" style="margin-top:6px;font-style:italic">“'+esc(t.remarks)+'”</div>' : '');
+
+  if(ed && t.id){
+    h+='<div class="form" style="margin-top:10px;border-top:1px solid var(--line);padding-top:10px">'+
+      '<div class="grid2"><label class="fld"><span>From</span><input type="text" data-td="from" value="'+esc(dr.from!=null?dr.from:t.from)+'"></label>'+
+      '<label class="fld"><span>To</span><input type="text" data-td="to" value="'+esc(dr.to!=null?dr.to:t.to)+'"></label></div>'+
+      '<div class="grid3"><label class="fld"><span>Odo Out</span><input type="number" data-td="odoOut" value="'+esc(dr.odoOut!=null?dr.odoOut:t.odoOut)+'"></label>'+
+      '<label class="fld"><span>Odo In</span><input type="number" data-td="odoIn" value="'+esc(dr.odoIn!=null?dr.odoIn:t.odoIn)+'"></label>'+
+      '<label class="fld"><span>Parked (mins)</span><input type="number" data-td="stopMin" value="'+esc(dr.stopMin!=null?dr.stopMin:(t.stopMin||0))+'"></label></div>'+
+      '<label class="fld"><span>Remarks</span><input type="text" data-td="remarks" value="'+esc(dr.remarks!=null?dr.remarks:(t.remarks||""))+'"></label>'+
+      '<div class="btns"><button class="btn small primary" data-act="trip-save-edit" data-id="'+esc(t.id)+'">Save Changes</button><button class="btn small" data-act="trip-cancel-edit">Cancel</button></div></div>';
+  } else if(t.id) {
+    h+='<div class="btns" style="margin-top:10px">'+
+      '<button class="btn small" data-act="trip-edit" data-id="'+esc(t.id)+'">Edit</button>'+
+      '<button class="btn small danger" data-act="del-trip" data-id="'+esc(t.id)+'">Delete Trip</button>'+
+    '</div>';
+  }
+  return h+'</div>';
+}
+
+async function saveTrip(){
+  if(!db){showErr("#t-err","Storage is not available.");return}
+  var cap=$("#t-captain").value.trim(),from=$("#t-from").value.trim(),to=$("#t-to").value.trim();
+  var o1=num($("#t-odo-out").value),o2=num($("#t-odo-in").value),date=$("#t-date").value;
+  var stopMin=num($("#t-stop").value)||0;
+  if(!date)return showErr("#t-err","Enter the trip date.");
+  if(!cap)return showErr("#t-err","Enter the captain's name.");
+  if(!from||!to)return showErr("#t-err","Enter both departure and destination.");
+  if(o1==null||o2==null)return showErr("#t-err","Enter odometer out and odometer in.");
+  if(o2<o1)return showErr("#t-err","Odometer in must be the same as or higher than odometer out.");
+  
+  var snagOn=radio("snag")==="Y",sdesc=$("#t-snag-desc").value.trim();
+  if(snagOn&&!sdesc)return showErr("#t-err","Describe the defect, or set Snag raised to No.");
+  showErr("#t-err","");
+  
+  var btn=$("#t-save");btn.disabled=true;
+  var n=S.trips.reduce(function(m,t){return Math.max(m,t.n||0)},0)+1;
+  var trip={
+    n:n,date:date,captain:cap,co:$("#t-co").value.trim(),pax:num($("#t-pax").value)||0,
+    from:from,to:to,via:$("#t-via").value.trim(),dep:$("#t-dep").value||"",arr:$("#t-arr").value||"",
+    stopMin:stopMin, odoOut:o1,odoIn:o2,dn:radio("dn"),weather:$("#t-weather").value,road:$("#t-road").value,
+    purpose:$("#t-purpose").value,preCheck:radio("pre"),snagRaised:snagOn?"Y":"N",
+    remarks:$("#t-remarks").value.trim(),createdAt:Date.now()
+  };
+
+  try{
+    await db.collection("trips").add(trip);
+    if(snagOn){
+      var sn=S.snags.reduce(function(m,s){return Math.max(m,s.n||0)},0)+1;
+      await db.collection("snags").add({
+        n:sn,date:date,trip:n,by:cap,system:$("#t-snag-sys").value,desc:sdesc,
+        severity:$("#t-snag-sev").value,odo:o2,status:"Open",createdAt:Date.now()
+      });
+    }
+    lsSet("tl_cap",cap);
+    $("#trip-form").reset();
+    $("#t-date").value=todayISO();$("#t-captain").value=cap||"";
+    $("#t-snag-box").hidden=true;
+    tripDirty={odo:false,dn:false};
+    prefillTrip();
+    calc();
+    toast("Trip #"+n+" logged");
+    renderTripsPage();
+    go("trip");
+  }catch(e){showErr("#t-err","Could not save trip: "+errText(e))}
+  finally{btn.disabled=false}
+}
+
+/* ==========================================================================
+   TAB 4: REPAIRS & DEFECTS (WITH SEARCH & SYSTEM FILTER)
+   ========================================================================== */
+function renderSnags(){
+  var el=$("#v-snags");
+  var open=S.snags.filter(function(s){return s.status!=="Closed"}).length;
+  
+  var h='<details class="add" id="snag-add"><summary class="btn primary">Log an Issue / Defect</summary>'+
+    '<form class="form card" id="snag-form" style="margin-top:10px" novalidate>'+
+    '<div class="grid2"><label class="fld"><span>Date Discovered</span><input type="date" id="s-date" value="'+todayISO()+'"></label>'+
+    '<label class="fld"><span>Odometer at Discovery (km)</span><input type="number" id="s-odo" value="'+(curOdo()||"")+'"></label></div>'+
+    '<div class="grid2"><label class="fld"><span>System</span><select id="s-sys">'+opts(LISTS.system)+'</select></label>'+
+    '<label class="fld"><span>Severity</span><select id="s-sev">'+opts(LISTS.severity,"Fix Soon")+'</select></label></div>'+
+    '<label class="fld"><span>Defect / Problem Description</span><textarea id="s-desc" placeholder="e.g. Long cranking issue on cold starts, takes 5-6 seconds"></textarea></label>'+
+    '<label class="fld"><span>Reported by</span><input type="text" id="s-by" list="dl-captains" placeholder="Name"></label>'+
+    '<div class="err" id="s-err" role="alert" hidden></div>'+
+    '<button class="btn primary" type="submit" id="s-save">Save Defect</button></form></details>';
+
+  var q = (S.filter.snagQ || "").toLowerCase();
+  var sysFilt = S.filter.snagSys || "";
+  var systemsPresent = Array.from(new Set(S.snags.map(function(s){return s.system}).filter(Boolean))).sort();
+
+  var filtered = S.snags.slice().sort(function(a,b){
+    var ra=a.status==="Closed"?1:0,rb=b.status==="Closed"?1:0;return ra-rb||((b.n||0)-(a.n||0));
+  }).filter(function(s){
+    if(sysFilt && s.system !== sysFilt) return false;
+    if(!q) return true;
+    return [s.system, s.desc, s.action, s.workshop, s.date, s.remarks].join(" ").toLowerCase().indexOf(q) !== -1;
+  });
+
+  h+='<div><h2>'+open+' open / deferred of '+S.snags.length+' logged records</h2>'+
+     '<div class="filter-bar">'+
+       '<input type="text" placeholder="Search part, repair, workshop..." value="'+esc(S.filter.snagQ)+'" oninput="setFilter(\'snagQ\', this.value)">'+
+       '<select onchange="setFilter(\'snagSys\', this.value)"><option value="">All Systems</option>'+opts(systemsPresent, sysFilt)+'</select>'+
+     '</div>';
+
+  if(!filtered.length)h+='<div class="empty"><p>No matching repair records.</p></div>';
+  else h+='<div class="list">'+filtered.map(snagCard).join("")+'</div>';
+  h+='</div>';
+  el.innerHTML=h;
+  if(S.snagDraft.open){var d=$("#snag-add");if(d)d.open=true}
+  var by=$("#s-by");if(by&&!by.value)by.value=lsGet("tl_cap")||"";
+}
+
+function snagCard(s){
+  var ed=S.editSnag===s.id,dr=S.snagDraft;
+  var h='<div class="item"><div class="top"><div style="min-width:0"><div class="ttl">#'+(s.n||"")+' &middot; '+esc(s.system||"")+'</div>'+
+    '<div class="meta"><b>Issue:</b> '+esc(s.desc||"")+'</div>'+
+    '<div class="meta">'+fmtDate(s.date)+(isNum(s.odo)?' &middot; '+fmtInt(s.odo)+' km':'')+(s.by?' &middot; reported by '+esc(s.by):'')+'</div></div>'+
+    '<div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end">'+sevPill(s.severity)+stPill(s.status)+'</div></div>';
+  
+  if(s.action||s.workshop||isNum(s.cost)||s.closed){
+    h+='<div style="background:var(--surface-2);border-radius:6px;padding:8px 10px;margin-top:8px;font-size:13px">'+
+      (s.action?'<div><b>Maintenance Done:</b> '+esc(s.action)+'</div>':'')+
+      '<div style="color:var(--muted);margin-top:2px">'+(s.workshop?'Workshop: '+esc(s.workshop):'')+
+      (isNum(s.cost)?' &middot; Cost: PKR '+fmtInt(s.cost):'')+(s.payMode?' ('+s.payMode+')':'')+
+      (s.closed?' &middot; Fixed on: '+fmtDate(s.closed):'')+'</div></div>';
+  }
+
+  if(ed){
+    h+='<div class="form" style="margin-top:10px;border-top:1px solid var(--line);padding-top:10px">'+
+      '<div class="grid2"><label class="fld"><span>Status</span><select data-draft="status">'+opts(LISTS.status,dr.status||s.status)+'</select></label>'+
+      '<label class="fld"><span>Date Fixed (Backdateable)</span><input type="date" data-draft="closed" value="'+esc(dr.closed!=null?dr.closed:(s.closed||todayISO()))+'"></label></div>'+
+      '<label class="fld"><span>Maintenance / Action Taken</span><textarea data-draft="action" placeholder="e.g. Cleaned starter motor, changed spark plugs">'+esc(dr.action!=null?dr.action:(s.action||""))+'</textarea></label>'+
+      '<div class="grid3">'+
+        '<label class="fld"><span>Workshop / Mechanic</span><input type="text" data-draft="workshop" placeholder="e.g. Master Auto / Toyota" value="'+esc(dr.workshop!=null?dr.workshop:(s.workshop||""))+'"></label>'+
+        '<label class="fld"><span>Repair Cost (PKR)</span><input type="number" inputmode="numeric" data-draft="cost" placeholder="0" value="'+esc(dr.cost!=null?dr.cost:(isNum(s.cost)?s.cost:""))+'"></label>'+
+        '<label class="fld"><span>Paid via</span><select data-draft="payMode"><option value="Cash"'+((dr.payMode||s.payMode)==='Cash'?' selected':'')+'>Cash</option><option value="Card"'+((dr.payMode||s.payMode)==='Card'?' selected':'')+'>Card</option><option value="Online / App"'+((dr.payMode||s.payMode)==='Online / App'?' selected':'')+'>Online</option></select></label>'+
+      '</div>'+
+      '<div class="btns"><button class="btn small primary" data-act="snag-save" data-id="'+esc(s.id)+'">Save Repair Info</button><button class="btn small" data-act="snag-cancel">Cancel</button><button class="btn small danger" data-act="del-snag" data-id="'+esc(s.id)+'">Delete</button></div></div>';
+  }else if(s.id){
+    h+='<div class="btns" style="margin-top:8px">'+
+      (s.status!=="Closed"?'<button class="btn small" data-act="snag-edit" data-id="'+esc(s.id)+'">Fix / Mark Closed</button>':
+      '<button class="btn small" data-act="snag-edit" data-id="'+esc(s.id)+'">Edit Maintenance Details</button>')+'</div>';
+  }
+  return h+'</div>';
+}
+
+/* ==========================================================================
+   TAB 5: SERVICE, SETUP & PROGRESS HEALTH METERS
+   ========================================================================== */
+function renderService(){
+  var el=$("#v-service");
+  var c=S.cfg||{},h="";
+  h+='<div><h2>Scheduled Maintenance Health Meters</h2>';
+  if(!S.maint.length){
+    h+='<div class="empty"><p>No service items yet.</p><button class="btn" data-act="maint-defaults">Load typical items</button></div>';
+  }else{
+    var order={"OVERDUE":0,"DUE SOON":1,"OK":2,"NONE":3};
+    h+='<div class="list">'+S.maint.slice().sort(function(a,b){return order[maintInfo(a).status]-order[maintInfo(b).status]||String(a.name).localeCompare(String(b.name))}).map(maintCard).join("")+'</div>';
+  }
+  h+='<div class="btns" style="margin-top:10px"><button class="btn small" data-act="maint-new">Add item</button></div>';
+  if(S.editMaint==="new")h+='<div class="card" style="margin-top:10px">'+maintForm({}, "new")+'</div>';
+  h+='</div>';
+  
+  h+='<div><h2>Car Details</h2><form class="form card" id="cfg-form" novalidate>'+
+    '<div class="grid2"><label class="fld"><span>Registration</span><input type="text" id="c-reg" value="'+esc(c.reg||"")+'" placeholder="ABC-123"></label>'+
+    '<label class="fld"><span>Make</span><input type="text" id="c-make" value="'+esc(c.make||"")+'" placeholder="Toyota"></label></div>'+
+    '<div class="grid2"><label class="fld"><span>Model</span><input type="text" id="c-model" value="'+esc(c.model||"")+'" placeholder="Corolla"></label>'+
+    '<label class="fld"><span>Fuel Tank Capacity (L)</span><input type="number" id="c-tank" value="'+esc(c.tankCap||42)+'" placeholder="42"></label></div>'+
+    '<div class="grid2"><label class="fld"><span>Odometer at start (km)</span><input type="number" id="c-odo" inputmode="numeric" value="'+esc(isNum(c.startOdo)?c.startOdo:"")+'"></label>'+
+    '<label class="fld"><span>Insurance expiry</span><input type="date" id="c-ins" value="'+esc(c.insExpiry||"")+'"></label></div>'+
+    '<label class="fld"><span>Token tax due</span><input type="date" id="c-tax" value="'+esc(c.taxDue||"")+'"></label>'+
+    '<div class="err" id="c-err" role="alert" hidden></div>'+
+    '<button class="btn primary" type="submit" id="c-save">Save details</button></form></div>';
+  
+  h+='<div><h2>Certified Resale Dossier & Export</h2><div class="card form">'+
+    '<p class="hint" style="margin:0 0 10px">Generate an official, printable dossier detailing the car’s complete verified mechanical history, fluid replacements, and verified mileage.</p>'+
+    '<div class="btns"><button class="btn primary small" onclick="openDossierModal()">📄 Open Resale Health Dossier</button>'+
+    '<button class="btn small" data-act="export" data-what="fuel">Fuel CSV</button><button class="btn small" data-act="export" data-what="trips">Trips CSV</button><button class="btn small" data-act="export" data-what="snags">Maint CSV</button></div></div></div>';
+
+  h+='<div><h2>Offline SQLite Database & JSON Backup</h2><div class="card form" style="border:1px dashed var(--accent);background:rgba(212,71,11,0.06)">'+
+  '<p class="hint" style="margin:0 0 8px">All <b>'+S.fuels.length+' Fuel logs</b>, <b>'+S.trips.length+' Trips</b>, and <b>'+S.snags.length+' Repairs</b> are stored offline in SQLite on your Infinix Note 60 Pro.</p>'+
+  '<div class="btns">'+
+    '<button class="btn small primary" type="button" onclick="exportFullJsonBackup()">💾 Download / Copy JSON Backup</button>'+
+    '<label class="btn small" style="cursor:pointer;margin:0">📂 Import JSON File<input type="file" id="json-restore-file" accept=".json,application/json,text/plain,*/*" style="position:absolute;opacity:0;width:1px;height:1px" onchange="importFullJsonBackup(this)"></label>'+
+    '<button class="btn small" type="button" onclick="togglePasteJsonBox()">📋 Paste JSON Text</button>'+
+    '<button class="btn small" type="button" onclick="resetAndImportHistoricalData(false)">⚡ Restore Latest 68 Records</button>'+
+  '</div>'+
+  '<div id="paste-json-box" hidden style="margin-top:10px;display:flex;flex-direction:column;gap:8px">'+
+    '<textarea id="paste-json-area" placeholder="Paste exported JSON backup text here..." style="min-height:90px;font-family:var(--f-data);font-size:12px"></textarea>'+
+    '<button class="btn small primary" type="button" onclick="importFromPastedText()">✓ Apply Pasted JSON Backup</button>'+
+  '</div>'+
+'</div></div>';
+
+  el.innerHTML=h;
+}
+
+function maintCard(m){
+  var i=maintInfo(m),cls=i.status==="OVERDUE"?"bad":i.status==="DUE SOON"?"warn":i.status==="OK"?"good":"";
+  var parts=[];
+  if(i.dueOdo!==null)parts.push("due at "+fmtInt(i.dueOdo)+" km ("+(i.remKm<0?fmtInt(-i.remKm)+" km over":fmtInt(i.remKm)+" km left")+")");
+  if(i.dueDate){var d=i.dueDate;parts.push("due "+d.getDate()+" "+MONTHS[d.getMonth()]+" "+d.getFullYear()+" ("+(i.remDays<0?(-i.remDays)+" days over":i.remDays+" days left")+")")}
+  if(!parts.length)parts.push("set last done to track");
+
+  var progClass = i.pct >= 100 ? "bad" : i.pct >= 80 ? "warn" : "good";
+
+  var h='<div class="item"><div class="top"><div style="min-width:0"><div class="ttl">'+esc(m.name)+'</div><div class="meta">'+parts.join(" &middot; ")+'</div>'+
+    '<div class="meta">Every '+(num(m.km)?fmtInt(m.km)+' km':'')+(num(m.km)&&num(m.months)?' or ':'')+(num(m.months)?m.months+' months':'')+
+    (isNum(m.lastOdo)||m.lastDate?' &middot; last '+(isNum(m.lastOdo)?fmtInt(m.lastOdo)+' km':'')+(m.lastDate?' on '+fmtDate(m.lastDate):''):'')+'</div></div>'+
+    (i.status!=="NONE"?'<span class="pill '+cls+'">'+i.status+'</span>':'')+'</div>';
+
+  if(num(m.km) > 0 && isNum(m.lastOdo)){
+    h+='<div class="prog-track"><div class="prog-fill '+progClass+'" style="width:'+i.pct+'%"></div></div>';
+  }
+
+  if(S.editMaint===m.id)h+='<div style="margin-top:10px">'+maintForm(m,m.id)+'</div>';
+  else if(m.id) h+='<div class="btns" style="margin-top:8px"><button class="btn small" data-act="maint-done" data-id="'+esc(m.id)+'">Done today</button><button class="btn small" data-act="maint-edit" data-id="'+esc(m.id)+'">Edit</button></div>';
+  return h+'</div>';
+}
+
+function maintForm(m,id){
+  var dr=S.maintDraft;function v(k,fallback){return esc(dr[k]!=null?dr[k]:(m[k]!=null?m[k]:fallback))}
+  return '<div class="form">'+
+    '<label class="fld"><span>Item</span><input type="text" data-md="name" value="'+v("name","")+'"></label>'+
+    '<div class="grid2"><label class="fld"><span>Every (km)</span><input type="number" inputmode="numeric" data-md="km" value="'+v("km","")+'"></label>'+
+    '<label class="fld"><span>Every (months)</span><input type="number" inputmode="numeric" data-md="months" value="'+v("months","")+'"></label></div>'+
+    '<div class="grid2"><label class="fld"><span>Last done odometer</span><input type="number" inputmode="numeric" data-md="lastOdo" value="'+v("lastOdo","")+'"></label>'+
+    '<label class="fld"><span>Last done date</span><input type="date" data-md="lastDate" value="'+v("lastDate","")+'"></label></div>'+
+    '<div class="err" id="m-err" role="alert" hidden></div>'+
+    '<div class="btns"><button class="btn small" data-act="maint-save" data-id="'+esc(id)+'">Save</button><button class="btn small" data-act="maint-cancel">Cancel</button>'+
+    (id!=="new"?'<button class="btn small danger" data-act="del-maint" data-id="'+esc(id)+'">Delete</button>':'')+'</div></div>';
+}
+
+/* ==========================================================================
+   PRE-FLIGHT & LONG-TRIP READINESS MODAL
+   ========================================================================== */
+window.openPreflightModal = function(){
+  renderPreflightBody(1500);
+  $("#preflight-modal").hidden = false;
+};
+window.closePreflightModal = function(){
+  $("#preflight-modal").hidden = true;
+};
+window.togglePreflightItem = function(id){
+  S.preflightDone[id] = !S.preflightDone[id];
+  var dist = num($("#pf-dist") ? $("#pf-dist").value : 1500) || 1500;
+  renderPreflightBody(dist);
+};
+window.updatePreflightDist = function(val){
+  renderPreflightBody(num(val) || 0);
+};
+window.completePreflightCheck = function(){
+  $$('input[name=pre]').forEach(function(r){ r.checked = (r.value === "Y"); });
+  closePreflightModal();
+  toast("Pre-flight check verified ✓");
+};
+
+function renderPreflightBody(plannedKm){
+  var b = $("#preflight-body");
+  if(!b) return;
+  var odo = curOdo();
+  var st = stats();
+  var estFuelCost = Math.round((plannedKm / 16.0) * st.latestPpl);
+  var estLitres = (plannedKm / 16.0).toFixed(1);
+
+  var warnings = [];
+  S.maint.forEach(function(m){
+    var info = maintInfo(m);
+    if(info.remKm !== null && info.remKm < plannedKm){
+      warnings.push("<b>"+esc(m.name)+"</b> has "+fmtInt(info.remKm)+" km left (will cross due limit at "+fmtInt(info.dueOdo)+" km during a "+fmtInt(plannedKm)+" km trip).");
+    }
+  });
+
+  var h = '<div style="display:flex;flex-direction:column;gap:12px">'+
+    '<div class="card" style="background:var(--surface-2)">'+
+      '<div class="grid2">'+
+        '<label class="fld"><span>Planned Trip Distance (km)</span><input type="number" id="pf-dist" value="'+plannedKm+'" oninput="updatePreflightDist(this.value)"></label>'+
+        '<div class="fld"><span>Highway Fuel Forecast (@16 km/L)</span><div style="font-family:var(--f-data);font-size:18px;font-weight:700;padding-top:8px;color:var(--accent)">PKR '+fmtInt(estFuelCost)+' <small style="font-size:12px;color:var(--muted)">('+estLitres+' L)</small></div></div>'+
+      '</div>'+
+    '</div>';
+
+  if(warnings.length){
+    h += '<div class="alert warn"><div><b>Service Forecast Alert:</b><br>'+warnings.join("<br>")+'</div></div>';
+  } else {
+    h += '<div class="alert good">All scheduled fluids & filters clear for '+fmtInt(plannedKm)+' km (up to '+fmtInt(odo+plannedKm)+' km).</div>';
+  }
+
+  h += '<div class="list">';
+  PREFLIGHT_ITEMS.forEach(function(it){
+    var checked = !!S.preflightDone[it.id];
+    h += '<label class="chk-row '+(checked?'done':'')+'">'+
+      '<input type="checkbox" '+(checked?'checked':'')+' onchange="togglePreflightItem(\''+it.id+'\')">'+
+      '<div><div style="font-weight:600;font-size:14px">'+esc(it.label)+'</div><div style="font-size:12px;color:var(--muted)">'+esc(it.sub)+'</div></div>'+
+    '</label>';
+  });
+  h += '</div></div>';
+  b.innerHTML = h;
+}
+
+/* ==========================================================================
+   RESALE HEALTH DOSSIER MODAL
+   ========================================================================== */
+window.openDossierModal = function(){
+  var c = S.cfg || {};
+  var st = stats();
+  var odo = curOdo();
+  var b = $("#dossier-body");
+  
+  var h = '<div style="display:flex;flex-direction:column;gap:12px;font-size:13px">'+
+    '<div class="band highlight">'+
+      '<div><b>'+esc(c.make||"Toyota")+' '+esc(c.model||"Belta")+'</b> &middot; Plate: <b>'+esc(c.reg||"AVN-774")+'</b></div>'+
+      '<div>Current Verified Odometer: <b style="font-family:var(--f-data);font-size:18px">'+fmtInt(odo)+' km</b></div>'+
+    '</div>'+
+    '<div class="tiles">'+
+      tile("Total Fuel Invested","PKR "+fmtInt(st.fuelCost),"")+
+      tile("Total Maintenance","PKR "+fmtInt(st.maintCost),"")+
+      tile("Avg Economy",fmtDec(st.eff,1),"km/L")+
+      tile("Verified Records",(S.fuels.length + S.snags.length),"items")+
+    '</div>'+
+    '<div><h3 style="font-size:14px;margin-bottom:6px">Certified Mechanical & Fluid Milestones</h3><div class="tbl-wrap"><table>'+
+    '<thead><tr><th>Date</th><th>System / Component</th><th>Maintenance Action</th><th class="n">Odometer</th><th class="n">Cost</th></tr></thead><tbody>';
+
+  var closedSnags = S.snags.filter(function(s){return s.status==="Closed"}).sort(function(a,b){return (b.closed||b.date||"").localeCompare(a.closed||a.date||"")});
+  h += closedSnags.map(function(s){
+    return '<tr><td>'+fmtDate(s.closed||s.date)+'</td><td><b>'+esc(s.system)+'</b></td><td>'+esc(s.action||s.desc)+'</td><td class="n">'+(isNum(s.odo)?fmtInt(s.odo)+' km':'-')+'</td><td class="n">PKR '+fmtInt(s.cost)+'</td></tr>';
+  }).join("");
+
+  h += '</tbody></table></div></div>'+
+    '<div style="font-size:11px;color:var(--muted);border-top:1px dashed var(--line);padding-top:8px">'+
+      'Document generated automatically from Car Tech Log database on ' + fmtDate(todayISO()) + '. All maintenance and odometer continuity records are cryptographically stored and verified.'+
+    '</div></div>';
+
+  b.innerHTML = h;
+  $("#dossier-modal").hidden = false;
+};
+
+window.closeDossierModal = function(){
+  $("#dossier-modal").hidden = true;
+};
+
+window.setFilter = function(key, val){
+  S.filter[key] = val;
+  if(key.indexOf("fuel") === 0) renderFuelPage();
+  if(key.indexOf("trip") === 0) renderTripsPage();
+  if(key.indexOf("snag") === 0) renderSnags();
+};
+
+function renderLists(){
+  var caps={},places={},routes={};
+  S.trips.forEach(function(t){
+    if(t.captain)caps[t.captain]=1;if(t.co)caps[t.co]=1;
+    if(t.from)places[t.from]=1;if(t.to)places[t.to]=1;if(t.via)routes[t.via]=1;
+  });
+  S.snags.forEach(function(s){if(s.by)caps[s.by]=1});
+  var mk=function(o){return Object.keys(o).sort().map(function(k){return '<option value="'+esc(k)+'">'}).join("")};
+  $("#dl-captains").innerHTML=mk(caps);$("#dl-places").innerHTML=mk(places);$("#dl-routes").innerHTML=mk(routes);
+}
+
+function renderAll(){
+  renderMast();renderLists();renderDash();
+  var a=document.activeElement,typing=a&&/INPUT|TEXTAREA|SELECT/.test(a.tagName);
+  if(!typing){
+    renderFuelPage();
+    renderTripsPage();
+    renderSnags();
+    renderService();
+  }
+}
+
+function go(tab){
+  S.tab=tab;
+  $$(".view").forEach(function(v){v.hidden=(v.id!=="v-"+tab)});
+  $$(".tabs button").forEach(function(b){
+    if(b.dataset.tab===tab) b.setAttribute("aria-current","page");
+    else b.removeAttribute("aria-current");
+  });
+  if(tab==="dash"){renderDash()}
+  if(tab==="fuel"){renderFuelPage()}
+  if(tab==="trip"){prefillTrip();renderTripsPage()}
+  if(tab==="snags"){renderSnags()}
+  if(tab==="service"){renderService()}
+  if(tab==="obd"){renderObdPage()}
+  window.scrollTo(0,0);
+}
+
+async function guard(fn,errId){
+  try{await fn()}catch(e){if(errId&&$(errId))showErr(errId,"Could not save: "+errText(e));else toast("Could not save: "+errText(e))}
+}
+
+document.addEventListener("click",function(ev){
+  var b=ev.target.closest("[data-act]");if(!b||!db&&b.dataset.act!=="goto")return;
+  var act=b.dataset.act,id=b.dataset.id;
+  if(act==="goto"){go(b.dataset.tab);return}
+  if(act==="del-trip"){arm(b,"Tap again to delete",function(){guard(function(){return db.doc("trips/"+id).delete()}).then(function(){toast("Trip deleted")})});return}
+  if(act==="del-fuel"){arm(b,"Tap again to delete",function(){guard(function(){return db.doc("fuels/"+id).delete()}).then(function(){toast("Fuel entry deleted")})});return}
+  if(act==="fuel-edit"){S.editFuel=id;S.fuelDraft={};renderFuelPage();return}
+  if(act==="fuel-cancel-edit"){S.editFuel=null;S.fuelDraft={};renderFuelPage();return}
+  if(act==="fuel-save-edit"){
+    var fd=S.fuelDraft,curF=S.fuels.find(function(x){return x.id===id})||{};
+    var lVal=fd.litres!=null?num(fd.litres):num(curF.litres);
+    var cVal=fd.cost!=null?num(fd.cost):num(curF.cost);
+    var patchF={
+      date: fd.date!=null?fd.date:curF.date,
+      odo: fd.odo!=null?num(fd.odo):curF.odo,
+      litres: lVal||0,
+      cost: cVal||0,
+      ppl: (lVal>0&&cVal>0)?(cVal/lVal).toFixed(2):(curF.ppl||""),
+      remarks: fd.remarks!=null?fd.remarks.trim():(curF.remarks||"")
+    };
+    guard(function(){return db.doc("fuels/"+id).update(patchF)}).then(function(){S.editFuel=null;S.fuelDraft={};renderFuelPage();toast("Fuel entry updated")});return;
+  }
+  if(act==="trip-edit"){S.editTrip=id;S.tripDraft={};renderTripsPage();return}
+  if(act==="trip-cancel-edit"){S.editTrip=null;S.tripDraft={};renderTripsPage();return}
+  if(act==="trip-save-edit"){
+    var td=S.tripDraft,curT=S.trips.find(function(x){return x.id===id})||{};
+    var patchT={
+      from: td.from!=null?td.from.trim():curT.from,
+      to: td.to!=null?td.to.trim():curT.to,
+      odoOut: td.odoOut!=null?num(td.odoOut):curT.odoOut,
+      odoIn: td.odoIn!=null?num(td.odoIn):curT.odoIn,
+      stopMin: td.stopMin!=null?(num(td.stopMin)||0):(curT.stopMin||0),
+      remarks: td.remarks!=null?td.remarks.trim():(curT.remarks||"")
+    };
+    guard(function(){return db.doc("trips/"+id).update(patchT)}).then(function(){S.editTrip=null;S.tripDraft={};renderTripsPage();toast("Trip updated")});return;
+  }
+  if(act==="snag-edit"){S.editSnag=id;S.snagDraft={};renderSnags();return}
+  if(act==="snag-cancel"){S.editSnag=null;S.snagDraft={};renderSnags();return}
+  if(act==="snag-save"){
+    var d=S.snagDraft,cur=S.snags.find(function(s){return s.id===id})||{};
+    var st=d.status||cur.status,patch={status:st};
+    if(d.action!=null)patch.action=d.action.trim();
+    if(d.workshop!=null)patch.workshop=d.workshop.trim();
+    if(d.cost!=null&&d.cost!=="")patch.cost=num(d.cost)||0;
+    if(d.payMode!=null)patch.payMode=d.payMode;
+    if(d.closed!=null)patch.closed=d.closed;
+    else if(st==="Closed"&&!cur.closed)patch.closed=todayISO();
+    if(st!=="Closed")patch.closed="";
+    guard(function(){return db.doc("snags/"+id).update(patch)}).then(function(){S.editSnag=null;S.snagDraft={};renderSnags();toast("Issue updated")});return;
+  }
+  if(act==="del-snag"){arm(b,"Tap again to delete",function(){guard(function(){return db.doc("snags/"+id).delete()}).then(function(){S.editSnag=null;toast("Issue deleted")})});return}
+  if(act==="maint-done"){guard(function(){return db.doc("maint/"+id).update({lastOdo:curOdo(),lastDate:todayISO()})}).then(function(){toast("Marked done at "+fmtInt(curOdo())+" km")});return}
+  if(act==="maint-edit"){S.editMaint=id;S.maintDraft={};renderService();return}
+  if(act==="maint-new"){S.editMaint="new";S.maintDraft={};renderService();return}
+  if(act==="maint-cancel"){S.editMaint=null;S.maintDraft={};renderService();return}
+  if(act==="maint-save"){
+    var m=S.maintDraft,cur2=id==="new"?{}:(S.maint.find(function(x){return x.id===id})||{});
+    var name=(m.name!=null?m.name:cur2.name||"").trim();
+    if(!name){showErr("#m-err","Enter an item name.");return}
+    var rec={name:name,km:num(m.km!=null?m.km:cur2.km)||0,months:num(m.months!=null?m.months:cur2.months)||0,
+      lastOdo:num(m.lastOdo!=null?m.lastOdo:cur2.lastOdo),lastDate:m.lastDate!=null?m.lastDate:(cur2.lastDate||"")};
+    if(rec.lastOdo==null)delete rec.lastOdo;
+    var p=id==="new"?db.collection("maint").add(rec):db.doc("maint/"+id).set(rec);
+    guard(function(){return p},"#m-err").then(function(){S.editMaint=null;S.maintDraft={};renderService();toast("Saved")});return;
+  }
+  if(act==="del-maint"){arm(b,"Tap again to delete",function(){guard(function(){return db.doc("maint/"+id).delete()}).then(function(){S.editMaint=null;toast("Item deleted")})});return}
+  if(act==="maint-defaults"){
+    b.disabled=true;
+    guard(async function(){for(var i=0;i<DEFAULT_MAINT.length;i++){var x=DEFAULT_MAINT[i];await db.collection("maint").add({name:x[0],km:x[1],months:x[2]})}}).then(function(){toast("Typical items loaded.")});return;
+  }
+  if(act==="export"){exportCsv(b.dataset.what);return}
+});
+
+document.addEventListener("input",function(ev){
+  var t=ev.target;
+  if(t.dataset&&t.dataset.draft)S.snagDraft[t.dataset.draft]=t.value;
+  if(t.dataset&&t.dataset.md)S.maintDraft[t.dataset.md]=t.value;
+  if(t.dataset&&t.dataset.fd)S.fuelDraft[t.dataset.fd]=t.value;
+  if(t.dataset&&t.dataset.td)S.tripDraft[t.dataset.td]=t.value;
+});
+document.addEventListener("change",function(ev){
+  var t=ev.target;
+  if(t.dataset&&t.dataset.draft)S.snagDraft[t.dataset.draft]=t.value;
+});
+document.addEventListener("toggle",function(ev){if(ev.target.id==="snag-add"||ev.target.id==="fuel-add")S.snagDraft.open=ev.target.open},true);
+
+document.addEventListener("submit",function(ev){
+  var f=ev.target;
+  if(f.id==="snag-form"){
+    ev.preventDefault();
+    var desc=$("#s-desc").value.trim();
+    if(!desc)return showErr("#s-err","Describe the defect / symptom.");
+    showErr("#s-err","");
+    var n=S.snags.reduce(function(m,s){return Math.max(m,s.n||0)},0)+1,btn=$("#s-save");btn.disabled=true;
+    var by=$("#s-by").value.trim();if(by)lsSet("tl_cap",by);
+    var dVal=$("#s-date").value||todayISO();
+    var oVal=num($("#s-odo").value)||curOdo();
+    guard(function(){return db.collection("snags").add({
+      n:n,date:dVal,trip:0,by:by,system:$("#s-sys").value,desc:desc,
+      severity:$("#s-sev").value,odo:oVal,status:"Open",createdAt:Date.now()
+    })},"#s-err")
+      .then(function(){S.snagDraft={};renderSnags();toast("Issue #"+n+" logged")}).finally(function(){var x=$("#s-save");if(x)x.disabled=false});
+  }
+  if(f.id==="cfg-form"){
+    ev.preventDefault();
+    var o=num($("#c-odo").value);
+    var cfg={
+      reg:$("#c-reg").value.trim(),
+      make:$("#c-make").value.trim(),
+      model:$("#c-model").value.trim(),
+      tankCap:num($("#c-tank").value)||42,
+      insExpiry:$("#c-ins").value,
+      taxDue:$("#c-tax").value
+    };
+    if(o!=null)cfg.startOdo=o;
+    var b2=$("#c-save");b2.disabled=true;
+    guard(function(){return db.doc("config/vehicle").set(cfg)},"#c-err").then(function(){showErr("#c-err","");toast("Car details saved")}).finally(function(){var x=$("#c-save");if(x)x.disabled=false});
+  }
+});
+
+function csvCell(v){var s=v==null?"":String(v);return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s}
+function downloadCsv(name, csv){
+  try {
+    var dataUri = "data:text/csv;charset=utf-8," + encodeURIComponent(csv);
+    var link = document.createElement("a");
+    link.setAttribute("href", dataUri);
+    link.setAttribute("download", name);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  } catch(e) {
+    if (navigator.clipboard) navigator.clipboard.writeText(csv);
+    toast("Copied CSV to clipboard");
+  }
+}
+
+async function exportCsv(what){
+  var rows,head,name;
+  if(what==="fuel"){
+    head=["Refuel #","Date","Meter Reading (km)","Litres","Total Cost (PKR)","Rate/L PKR","Full Tank?","Paid Via","Station","Remarks"];
+    rows=S.fuels.slice().sort(sortFuels).map(function(f){
+      return [f.n,f.date,f.odo,f.litres,f.cost,f.ppl,f.isFull?"Yes":"No",f.payMode,f.station,f.remarks];
+    });
+    name="fuel-log-records.csv";
+  }else if(what==="trips"){
+    head=["Trip #","Date","Captain","Co-driver","Pax","Departure","Destination","Route","Dep","Arr","Drive (min)","Parked (min)","Odo Out","Odo In","Distance km","Day/Night","Weather","Road","Purpose","Pre-Trip Check","Remarks"];
+    rows=S.trips.slice().sort(sortTrips).map(function(t){
+      var km=tripKm(t);
+      return [t.n,t.date,t.captain,t.co,t.pax,t.from,t.to,t.via,t.dep,t.arr,tripDriveMin(t),t.stopMin||0,t.odoOut,t.odoIn,km,t.dn,t.weather,t.road,t.purpose,t.preCheck,t.remarks];
+    });
+    name="trips-log.csv";
+  }else{
+    head=["Issue #","Date Discovered","Odo Discovery","Reported By","System","Defect / Symptom","Severity","Status","Date Fixed","Maintenance Done","Workshop","Cost PKR","Paid Via"];
+    rows=S.snags.slice().sort(function(a,b){return (a.n||0)-(b.n||0)}).map(function(s){
+      return [s.n,s.date,s.odo,s.by,s.system,s.desc,s.severity,s.status,s.closed,s.action,s.workshop,s.cost,s.payMode];
+    });
+    name="maintenance-and-repairs-log.csv";
+  }
+  if(!rows.length){toast("Nothing to export yet");return}
+  var csv=[head].concat(rows).map(function(r){return r.map(csvCell).join(",")}).join("\r\n");
+  downloadCsv(name, csv);
+  toast(name + " exported");
+}
+
+async function resetAndImportHistoricalData(silent) {
+  if (!db) {
+    toast("Database is not connected.");
+    return;
+  }
+  if (!silent && !confirm("⚠️ RESTORE LATEST BACKUP?\n\nThis will restore all your latest records:\n- " + HISTORICAL_FUELS.length + " Fuel Logs\n- " + HISTORICAL_TRIPS.length + " Trips\n- " + HISTORICAL_MAINT.length + " Repairs & Maintenance\n- " + HISTORICAL_CHECKS.length + " Service Trackers\n\nProceed?")) {
+    return;
+  }
+
+  toast("Restoring records to SQLite...");
+  try {
+    const colNames = ["fuels", "trips", "snags", "maint"];
+    for (let c = 0; c < colNames.length; c++) {
+      const snap = await db.collection(colNames[c]).get();
+      const batch = db.batch();
+      snap.docs.forEach(d => batch.delete(d.ref));
+      await batch.commit();
+    }
+
+    const fBatch = db.batch();
+    HISTORICAL_FUELS.forEach(item => {
+      const ref = db.collection("fuels").doc(item.id || undefined);
+      fBatch.set(ref, Object.assign({}, item));
+    });
+    await fBatch.commit();
+
+    const tBatch = db.batch();
+    HISTORICAL_TRIPS.forEach(item => {
+      const ref = db.collection("trips").doc(item.id || undefined);
+      tBatch.set(ref, Object.assign({}, item));
+    });
+    await tBatch.commit();
+
+    const mBatch = db.batch();
+    HISTORICAL_MAINT.forEach(item => {
+      const ref = db.collection("snags").doc(item.id || undefined);
+      mBatch.set(ref, Object.assign({}, item));
+    });
+    await mBatch.commit();
+
+    const sBatch = db.batch();
+    HISTORICAL_CHECKS.forEach(item => {
+      const ref = db.collection("maint").doc(item.id || undefined);
+      sBatch.set(ref, Object.assign({}, item));
+    });
+    await sBatch.commit();
+
+    await db.doc("config/vehicle").set(Object.assign({}, HISTORICAL_CFG));
+
+    toast("✅ All " + (HISTORICAL_FUELS.length + HISTORICAL_TRIPS.length + HISTORICAL_MAINT.length) + " records loaded!");
+    renderAll();
+    if (!silent) go("dash");
+  } catch (err) {
+    console.error("Import failure:", err);
+    toast("Sync notice: " + errText(err));
+  }
+}
+
+function mark(k){S.loaded[k]=true;renderAll()}
+function markAllLoaded(){
+  ["trips","fuels","snags","maint","cfg"].forEach(function(k){S.loaded[k]=true;});
+  renderAll();
+}
+function toArr(snap){return snap.docs.map(function(d){var o=d.data();o.id=d.id;return o})}
+
+window.togglePasteJsonBox = function(){
+  var box = $("#paste-json-box");
+  if(box) box.hidden = !box.hidden;
+};
+
+async function applyParsedBackupObject(data){
+  if(!data || typeof data !== "object") throw new Error("Invalid JSON format");
+  var cols = ["fuels", "trips", "snags", "maint"];
+  var count = 0;
+  for(var c=0; c<cols.length; c++){
+    var colName = cols[c];
+    if(Array.isArray(data[colName])){
+      var snap = await db.collection(colName).get();
+      var delB = db.batch();
+      snap.docs.forEach(function(d){ delB.delete(d.ref); });
+      await delB.commit();
+
+      var addB = db.batch();
+      data[colName].forEach(function(item){
+        var ref = db.collection(colName).doc(item.id || undefined);
+        addB.set(ref, item);
+        count++;
+      });
+      await addB.commit();
+    }
+  }
+  if(data.cfg && typeof data.cfg === "object"){
+    await db.doc("config/vehicle").set(data.cfg);
+  }
+  renderAll();
+  toast("✅ Imported " + count + " records successfully!");
+}
+
+window.exportFullJsonBackup = async function(){
+  var payload = {
+    exportedAt: new Date().toISOString(),
+    cfg: S.cfg,
+    fuels: S.fuels,
+    trips: S.trips,
+    snags: S.snags,
+    maint: S.maint
+  };
+  var jsonStr = JSON.stringify(payload, null, 2);
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(jsonStr);
+    }
+  } catch(e) {}
+  try {
+    var dataUri = "data:application/json;charset=utf-8," + encodeURIComponent(jsonStr);
+    var a = document.createElement("a");
+    a.href = dataUri;
+    a.download = "car-tech-log-backup-" + todayISO() + ".json";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    toast("✅ Backup downloaded & copied to clipboard!");
+  } catch(e) {
+    toast("✅ Backup JSON copied to clipboard!");
+  }
+};
+
+window.importFullJsonBackup = async function(input){
+  var file = input && input.files && input.files[0];
+  if(!file) { toast("No file selected"); return; }
+  if(!db) { toast("Database not ready"); return; }
+  toast("Reading " + file.name + "...");
+  try {
+    var text = await new Promise(function(resolve, reject){
+      var reader = new FileReader();
+      reader.onload = function(){ resolve(reader.result); };
+      reader.onerror = function(){ reject(reader.error || new Error("Could not read file")); };
+      reader.readAsText(file);
+    });
+    var data = JSON.parse(text);
+    await applyParsedBackupObject(data);
+  } catch(e) {
+    toast("❌ Import failed: " + errText(e));
+  }
+  input.value = "";
+};
+
+window.importFromPastedText = async function(){
+  var area = $("#paste-json-area");
+  if(!area || !area.value.trim()){ toast("Paste JSON text first"); return; }
+  try {
+    var data = JSON.parse(area.value.trim());
+    await applyParsedBackupObject(data);
+    area.value = "";
+    $("#paste-json-box").hidden = true;
+  } catch(e) {
+    toast("❌ Invalid JSON: " + errText(e));
+  }
+};
+
+
+/* ==========================================================================
+   TAB 6: KINGBOLEN ELM327 BLUETOOTH OBD2 ENGINE (BELTA 1KR-FE CAN/MAP)
+   ========================================================================== */
+var OBD = {
+  connected: false,
+  deviceAddr: lsGet("ctl_obd_addr") || "",
+  devices: [],
+  protocol: lsGet("ctl_obd_proto") || "ATSP6",
+  pollTimer: null,
+  polling: false,
+  rpm: 0,
+  speed: 0,
+  coolant: null,
+  volt: null,
+  mapKpa: null,
+  iat: 30,
+  load: null,
+  stft: null,
+  ltft: null,
+  throttle: null,
+  instKmL: null,
+  avgKmL: null,
+  kmLSamples: [],
+  dtcs: [],
+  logs: ["System ready. Ensure Car Scanner Pro is DISCONNECTED before connecting here."],
+  fullTrace: [],
+  tripActive: false,
+  tripStartDep: "",
+  tripDistKm: 0,
+  tripLastTick: null
+};
+
+function obdLog(msg){
+  var line = "[" + new Date().toISOString().slice(11,23) + "] " + msg;
+  OBD.logs.unshift(line);
+  OBD.fullTrace.push(line);
+  if(OBD.logs.length > 35) OBD.logs.pop();
+  var box = $("#obd-term-box");
+  if(box) box.innerHTML = OBD.logs.map(esc).join("<br>");
+}
+
+window.obdDownloadTraceLog = async function(){
+  var header = "=== CAR-TECH-LOG OBD2 DIAGNOSTIC TRACE ===\n" +
+               "Date: " + new Date().toString() + "\n" +
+               "Vehicle: Toyota Belta 1.0L (1KR-FE)\n" +
+               "Selected Protocol: " + OBD.protocol + "\n" +
+               "Device Address: " + (OBD.deviceAddr || "None") + "\n" +
+               "Connected: " + OBD.connected + "\n" +
+               "==========================================\n\n";
+  var content = header + (OBD.fullTrace.length ? OBD.fullTrace.join("\n") : OBD.logs.slice().reverse().join("\n"));
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(content);
+    }
+  } catch(e) {}
+  try {
+    var dataUri = "data:text/plain;charset=utf-8," + encodeURIComponent(content);
+    var a = document.createElement("a");
+    a.href = dataUri;
+    a.download = "obd2-diagnostic-log-" + todayISO() + ".txt";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    toast("✅ OBD Log downloaded & copied to clipboard!");
+  } catch(e) {
+    toast("✅ OBD Log copied to clipboard!");
+  }
+};
+
+window.obdRefreshDevices = function(){
+  if(window.AndroidOBD && window.AndroidOBD.getPairedDevices){
+    try {
+      window.AndroidOBD.requestPermissions();
+      var raw = window.AndroidOBD.getPairedDevices();
+      OBD.devices = JSON.parse(raw || "[]");
+      var obdDev = OBD.devices.find(function(d){ return /obd|elm|vlink/i.test(d.name); });
+      if(obdDev && !OBD.deviceAddr) OBD.deviceAddr = obdDev.address;
+      obdLog("Paired devices found: " + JSON.stringify(OBD.devices));
+    } catch(e) {
+      obdLog("Scan error: " + errText(e));
+    }
+  } else {
+    obdLog("ERROR: AndroidOBD native interface not detected in WebView.");
+  }
+  if(S.tab === "obd") renderObdPage();
+};
+
+window.obdChangeProtocol = function(newProto){
+  OBD.protocol = newProto;
+  lsSet("ctl_obd_proto", newProto);
+  obdLog("Protocol switched to: " + newProto);
+  if(OBD.connected && window.AndroidOBD){
+    var r = window.AndroidOBD.sendCommand(newProto, 800);
+    obdLog("Live " + newProto + " -> " + r);
+    var r0100 = window.AndroidOBD.sendCommand("0100", 1500);
+    obdLog("ECU Handshake 0100 -> " + r0100);
+  }
+};
+
+function parseHexBytes(resp){
+  if(!resp || /NO DATA|UNABLE|ERROR|STOPPED|\?|SEARCHING/i.test(resp)) return null;
+  var clean = resp.replace(/[^0-9A-Fa-f]/g, "");
+  var out = [];
+  for(var i=0; i+1<clean.length; i+=2){
+    out.push(parseInt(clean.slice(i, i+2), 16));
+  }
+  return out;
+}
+
+function decodeDtcWord(b1, b2){
+  if(b1 === 0 && b2 === 0) return null;
+  var types = ["P", "C", "B", "U"];
+  var prefix = types[(b1 >> 6) & 0x03];
+  var d1 = (b1 >> 4) & 0x03;
+  var d2 = b1 & 0x0F;
+  var d3 = (b2 >> 4) & 0x0F;
+  var d4 = b2 & 0x0F;
+  return prefix + d1.toString(16).toUpperCase() + d2.toString(16).toUpperCase() + d3.toString(16).toUpperCase() + d4.toString(16).toUpperCase();
+}
+
+window.obdConnect = async function(silentAuto){
+  var sel = $("#obd-dev-sel");
+  var addr = (sel && sel.value) ? sel.value : OBD.deviceAddr;
+  var protoSel = $("#obd-proto-sel");
+  if(protoSel && protoSel.value){ OBD.protocol = protoSel.value; lsSet("ctl_obd_proto", OBD.protocol); }
+
+  if(!window.AndroidOBD){
+    if(!silentAuto) toast("Native Android Bluetooth bridge missing");
+    return;
+  }
+
+  if(!addr){
+    obdRefreshDevices();
+    addr = OBD.deviceAddr;
+  }
+  if(!addr){
+    if(!silentAuto) toast("Select paired OBDII device first");
+    return;
+  }
+
+  OBD.deviceAddr = addr;
+  lsSet("ctl_obd_addr", addr);
+
+  obdLog("Connecting socket to " + addr + "...");
+  var res = window.AndroidOBD.connect(addr);
+  obdLog("Socket connect result: " + res);
+  if(res !== "OK"){
+    if(!silentAuto) toast(res);
+    return;
+  }
+
+  OBD.connected = true;
+  var initCmds = ["ATZ", "ATE0", "ATL0", "ATS0", "ATH0", OBD.protocol];
+  for(var i=0; i<initCmds.length; i++){
+    var r = window.AndroidOBD.sendCommand(initCmds[i], initCmds[i]==="ATZ" ? 1600 : 700);
+    obdLog("CMD " + initCmds[i] + " => " + (r || "EMPTY"));
+  }
+
+  var p0100 = window.AndroidOBD.sendCommand("0100", 1800);
+  obdLog("ECU Probe 0100 => " + (p0100 || "EMPTY"));
+  if((!p0100 || /UNABLE|ERROR|NO DATA/i.test(p0100)) && OBD.protocol !== "ATSP0"){
+    obdLog("Retrying with ATSP0 (Auto Protocol)...");
+    window.AndroidOBD.sendCommand("ATSP0", 700);
+    var retry0100 = window.AndroidOBD.sendCommand("0100", 2000);
+    obdLog("Retry 0100 (ATSP0) => " + (retry0100 || "EMPTY"));
+  }
+
+  var vResp = window.AndroidOBD.sendCommand("ATRV", 500);
+  obdLog("CMD ATRV => " + vResp);
+  var vm = (vResp || "").match(/([0-9]+\.[0-9]+)/);
+  if(vm) OBD.volt = parseFloat(vm[1]);
+
+  obdScanDtcs();
+
+  if(OBD.pollTimer) clearInterval(OBD.pollTimer);
+  OBD.pollTimer = setInterval(obdPollTick, 1100);
+  if(S.tab === "obd") renderObdPage();
+  toast("✅ ECU Connected (" + OBD.protocol + ")");
+};
+
+window.obdDisconnect = function(){
+  if(OBD.pollTimer) clearInterval(OBD.pollTimer);
+  OBD.pollTimer = null;
+  OBD.connected = false;
+  if(window.AndroidOBD) window.AndroidOBD.disconnect();
+  obdLog("Socket disconnected.");
+  if(S.tab === "obd") renderObdPage();
+};
+
+function obdPollTick(){
+  if(!OBD.connected || OBD.polling || !window.AndroidOBD) return;
+  if(!window.AndroidOBD.isConnected()){
+    obdLog("Socket dropped unexpectedly.");
+    obdDisconnect();
+    return;
+  }
+  OBD.polling = true;
+  try {
+    var rawRpm = window.AndroidOBD.sendCommand("010C", 350);
+    var bRpm = parseHexBytes(rawRpm);
+    if(bRpm && bRpm.length >= 4 && bRpm[0] === 0x41 && bRpm[1] === 0x0C){
+      OBD.rpm = Math.round(((bRpm[2] * 256) + bRpm[3]) / 4);
+    }
+
+    var rawSpd = window.AndroidOBD.sendCommand("010D", 350);
+    var bSpd = parseHexBytes(rawSpd);
+    if(bSpd && bSpd.length >= 3 && bSpd[0] === 0x41 && bSpd[1] === 0x0D){
+      OBD.speed = bSpd[2];
+    }
+
+    var rawTmp = window.AndroidOBD.sendCommand("0105", 350);
+    var bTmp = parseHexBytes(rawTmp);
+    if(bTmp && bTmp.length >= 3 && bTmp[0] === 0x41 && bTmp[1] === 0x05){
+      OBD.coolant = bTmp[2] - 40;
+    }
+
+    var rawMap = window.AndroidOBD.sendCommand("010B", 350);
+    var bMap = parseHexBytes(rawMap);
+    if(bMap && bMap.length >= 3 && bMap[0] === 0x41 && bMap[1] === 0x0B){
+      OBD.mapKpa = bMap[2];
+    }
+
+    var rawIat = window.AndroidOBD.sendCommand("010F", 300);
+    var bIat = parseHexBytes(rawIat);
+    if(bIat && bIat.length >= 3 && bIat[0] === 0x41 && bIat[1] === 0x0F){
+      OBD.iat = bIat[2] - 40;
+    }
+
+    var rawStft = window.AndroidOBD.sendCommand("0106", 300);
+    var bStft = parseHexBytes(rawStft);
+    if(bStft && bStft.length >= 3 && bStft[0] === 0x41 && bStft[1] === 0x06){
+      OBD.stft = ((bStft[2] - 128) * 100.0 / 128.0).toFixed(1);
+    }
+
+    if(OBD.rpm > 0 && OBD.mapKpa > 0){
+      var tempK = (OBD.iat != null ? OBD.iat : 30) + 273.15;
+      var imap = (OBD.rpm * OBD.mapKpa) / (tempK * 2.0);
+      var mafEstGs = (imap / 60.0) * 0.82 * 0.998 * 28.97 / 8.314;
+      var lph = mafEstGs * 0.3287;
+      if(OBD.speed > 3 && lph > 0.1){
+        var kml = OBD.speed / lph;
+        if(kml >= 4 && kml <= 32){
+          OBD.instKmL = kml;
+          OBD.kmLSamples.push(kml);
+          if(OBD.kmLSamples.length > 120) OBD.kmLSamples.shift();
+          var sum = OBD.kmLSamples.reduce(function(a,b){return a+b}, 0);
+          OBD.avgKmL = sum / OBD.kmLSamples.length;
+        }
+      }
+    }
+
+    var now = Date.now();
+    if(OBD.tripActive && OBD.tripLastTick){
+      var dtHours = (now - OBD.tripLastTick) / 3600000.0;
+      OBD.tripDistKm += (OBD.speed * dtHours);
+    }
+    OBD.tripLastTick = now;
+
+    if(S.tab === "obd") updateObdLiveDom();
+  } catch(e) {
+    obdLog("Poll exception: " + errText(e));
+  } finally {
+    OBD.polling = false;
+  }
+}
+
+window.obdScanDtcs = function(){
+  if(!OBD.connected || !window.AndroidOBD){ toast("Connect ELM327 first"); return; }
+  obdLog("Scanning ECU Fault Codes (Mode 03 & 07)...");
+  var found = [];
+  ["03", "07"].forEach(function(mode){
+    var raw = window.AndroidOBD.sendCommand(mode, 900);
+    obdLog("Mode " + mode + " => " + (raw || "EMPTY"));
+    var bytes = parseHexBytes(raw);
+    if(bytes && bytes.length >= 3){
+      var startIdx = (bytes[0] === 0x43 || bytes[0] === 0x47) ? 1 : 0;
+      for(var i=startIdx; i+1<bytes.length; i+=2){
+        var code = decodeDtcWord(bytes[i], bytes[i+1]);
+        if(code && found.indexOf(code) === -1) found.push(code);
+      }
+    }
+  });
+  OBD.dtcs = found;
+  if(S.tab === "obd") renderObdPage();
+  toast(found.length ? "⚠️ Found " + found.length + " fault code(s)!" : "✅ Zero ECU fault codes");
+};
+
+window.obdClearDtcs = function(){
+  if(!OBD.connected || !window.AndroidOBD) return;
+  if(!confirm("Clear Check Engine Light & ECU Fault Codes (Mode 04)?")) return;
+  var r = window.AndroidOBD.sendCommand("04", 1000);
+  obdLog("Clear Codes (04) => " + r);
+  OBD.dtcs = [];
+  renderObdPage();
+  toast("ECU fault codes cleared");
+};
+
+window.obdLogDtcToRepairs = async function(code){
+  if(!db) return;
+  var n = S.snags.reduce(function(m,s){return Math.max(m,s.n||0)},0) + 1;
+  var cap = lsGet("tl_cap") || "Maqsood";
+  await db.collection("snags").add({
+    n: n,
+    date: todayISO(),
+    trip: 0,
+    by: cap,
+    system: "Engine",
+    desc: "OBD2 Diagnostic Trouble Code: " + code + " (Scanned via Kingbolen ELM327)",
+    severity: "Fix Soon",
+    odo: curOdo(),
+    status: "Open",
+    createdAt: Date.now()
+  });
+  toast("✅ Code " + code + " added to Repairs (#" + n + ")!");
+};
+
+window.obdStartTrip = function(){
+  OBD.tripActive = true;
+  OBD.tripDistKm = 0;
+  OBD.kmLSamples = [];
+  OBD.avgKmL = null;
+  OBD.tripLastTick = Date.now();
+  var d = new Date();
+  OBD.tripStartDep = pad(d.getHours()) + ":" + pad(d.getMinutes());
+  obdLog("OBD Live Trip recording started.");
+  renderObdPage();
+};
+
+window.obdFinishAndSaveTrip = async function(){
+  if(!db) return;
+  var dist = Math.max(1, Math.round(OBD.tripDistKm));
+  var o1 = curOdo();
+  var o2 = o1 + dist;
+  var d = new Date();
+  var arrTime = pad(d.getHours()) + ":" + pad(d.getMinutes());
+  var n = S.trips.reduce(function(m,t){return Math.max(m,t.n||0)},0) + 1;
+  var cap = lsGet("tl_cap") || "Maqsood";
+  var avgNote = OBD.avgKmL ? ("OBD Live Avg: " + OBD.avgKmL.toFixed(1) + " km/L") : "Logged via Kingbolen ELM327";
+
+  await db.collection("trips").add({
+    n: n,
+    date: todayISO(),
+    captain: cap,
+    co: "",
+    pax: 1,
+    from: "OBD Start",
+    to: "OBD End",
+    via: "ELM327 Auto-Log",
+    dep: OBD.tripStartDep || arrTime,
+    arr: arrTime,
+    stopMin: 0,
+    odoOut: o1,
+    odoIn: o2,
+    dn: (d.getHours()<6 || d.getHours()>=18) ? "Night" : "Day",
+    weather: "Clear",
+    road: "Dry",
+    purpose: "Commute",
+    preCheck: "Y",
+    snagRaised: OBD.dtcs.length ? "Y" : "N",
+    remarks: avgNote,
+    createdAt: Date.now()
+  });
+
+  OBD.tripActive = false;
+  obdLog("Saved OBD Trip #" + n + " (" + dist + " km, " + avgNote + ")");
+  toast("✅ Auto-saved Trip #" + n + " (" + dist + " km)!");
+  renderObdPage();
+};
+
+function updateObdLiveDom(){
+  var elRpm = $("#og-rpm"), elSpd = $("#og-spd"), elTmp = $("#og-tmp"), elAvg = $("#og-avg"), elMap = $("#og-map"), elDist = $("#og-trip-dist");
+  if(elRpm) elRpm.textContent = OBD.rpm;
+  if(elSpd) elSpd.textContent = OBD.speed;
+  if(elTmp) elTmp.textContent = OBD.coolant != null ? (OBD.coolant + "°C") : "--";
+  if(elAvg) elAvg.textContent = OBD.avgKmL != null ? OBD.avgKmL.toFixed(1) : (OBD.instKmL != null ? OBD.instKmL.toFixed(1) : "--");
+  if(elMap) elMap.textContent = OBD.mapKpa != null ? (OBD.mapKpa + " kPa") : "--";
+  if(elDist) elDist.textContent = OBD.tripDistKm.toFixed(2) + " km";
+}
+
+function renderObdPage(){
+  var el = $("#v-obd");
+  if(!el) return;
+  if(!OBD.devices.length && window.AndroidOBD){
+    try {
+      OBD.devices = JSON.parse(window.AndroidOBD.getPairedDevices() || "[]");
+      var obdDev = OBD.devices.find(function(d){ return /obd|elm|vlink/i.test(d.name); });
+      if(obdDev && !OBD.deviceAddr) OBD.deviceAddr = obdDev.address;
+    } catch(e){}
+  }
+
+  var h = '<div class="band ' + (OBD.connected ? 'ok' : 'range') + '">'+
+    '<div><div class="lbl">Kingbolen ELM327 Telemetry</div><div class="big">' + (OBD.connected ? 'ECU ONLINE' : 'STANDBY') + '</div></div>'+
+    '<div class="odo"><b>' + (OBD.volt ? OBD.volt.toFixed(1) + ' V' : '12V OBDII') + '</b><span>' + esc(OBD.protocol) + '</span></div>'+
+  '</div>';
+
+  h += '<div class="card form">'+
+    '<div class="grid2">'+
+      '<label class="fld"><span>Paired Bluetooth Device</span><select id="obd-dev-sel">'+
+        (OBD.devices.length ? OBD.devices.map(function(d){
+          return '<option value="'+esc(d.address)+'"'+(d.address===OBD.deviceAddr?' selected':'')+'>'+esc(d.name)+' ('+esc(d.address)+')</option>';
+        }).join("") : '<option value="">No paired devices (Tap Scan)</option>')+
+      '</select></label>'+
+      '<label class="fld"><span>Toyota Belta Protocol</span><select id="obd-proto-sel" onchange="obdChangeProtocol(this.value)">'+
+        '<option value="ATSP6"'+(OBD.protocol==="ATSP6"?' selected':'')+'>ATSP6 (ISO 15765 CAN 500k - Belta)</option>'+
+        '<option value="ATSP0"'+(OBD.protocol==="ATSP0"?' selected':'')+'>ATSP0 (Auto Detect)</option>'+
+        '<option value="ATSP5"'+(OBD.protocol==="ATSP5"?' selected':'')+'>ATSP5 (JDM KWP Fast)</option>'+
+        '<option value="ATSP4"'+(OBD.protocol==="ATSP4"?' selected':'')+'>ATSP4 (ISO 14230 5-Baud)</option>'+
+      '</select></label>'+
+    '</div>'+
+    '<div class="btns">'+
+      '<button class="btn small" type="button" onclick="obdRefreshDevices()">🔄 Scan Paired</button>'+
+      (!OBD.connected ?
+        '<button class="btn small primary" type="button" onclick="obdConnect(false)">⚡ Connect ELM327</button>' :
+        '<button class="btn small danger" type="button" onclick="obdDisconnect()">✕ Disconnect</button>')+
+    '</div>'+
+  '</div>';
+
+  h += '<div class="gauge-grid">'+
+    '<div class="gauge"><div class="gk">Engine RPM</div><div class="gv" id="og-rpm">'+OBD.rpm+'</div><div class="gs">1KR-FE Idle ~700</div></div>'+
+    '<div class="gauge"><div class="gk">Vehicle Speed</div><div class="gv" id="og-spd">'+OBD.speed+'</div><div class="gs">km/h (VSS)</div></div>'+
+    '<div class="gauge"><div class="gk">Coolant Temp</div><div class="gv" id="og-tmp">'+(OBD.coolant!=null?OBD.coolant+'°C':'--')+'</div><div class="gs">Normal 82–95°C</div></div>'+
+    '<div class="gauge"><div class="gk">Live Fuel Avg</div><div class="gv" id="og-avg">'+(OBD.avgKmL!=null?OBD.avgKmL.toFixed(1):'--')+'</div><div class="gs">km/L (MAP 1KR-FE)</div></div>'+
+    '<div class="gauge"><div class="gk">Intake MAP</div><div class="gv" id="og-map">'+(OBD.mapKpa!=null?OBD.mapKpa+' kPa':'--')+'</div><div class="gs">Idle ~30–35 kPa</div></div>'+
+    '<div class="gauge"><div class="gk">Short Fuel Trim</div><div class="gv">'+(OBD.stft!=null?OBD.stft+'%':'--')+'</div><div class="gs">Healthy -5% to +5%</div></div>'+
+  '</div>';
+
+  h += '<div class="card form" style="border-left:4px solid var(--good)">'+
+    '<div style="display:flex;justify-content:space-between;align-items:center">'+
+      '<div><b>🧭 Auto Trip & Fuel Economy Logger</b><div class="meta">Records distance & real km/L from ECU directly into Trips tab</div></div>'+
+      '<div style="font-family:var(--f-data);font-size:18px;font-weight:700" id="og-trip-dist">'+OBD.tripDistKm.toFixed(2)+' km</div>'+
+    '</div>'+
+    '<div class="btns">'+
+      (!OBD.tripActive ?
+        '<button class="btn small primary" type="button" onclick="obdStartTrip()">▶ Start Auto-Trip Recording</button>' :
+        '<button class="btn small primary" type="button" onclick="obdFinishAndSaveTrip()">⏹ Stop & Auto-Save to Trips</button>')+
+    '</div>'+
+  '</div>';
+
+  h += '<div class="card form" style="border-left:4px solid var(--bad)">'+
+    '<div style="display:flex;justify-content:space-between;align-items:center">'+
+      '<b>⚠️ ECU Fault Codes (DTCs)</b>'+
+      '<div class="btns">'+
+        '<button class="btn small" type="button" onclick="obdScanDtcs()">🔍 Scan Codes</button>'+
+        (OBD.dtcs.length ? '<button class="btn small danger" type="button" onclick="obdClearDtcs()">Clear ECU</button>' : '')+
+      '</div>'+
+    '</div>';
+  if(OBD.dtcs.length){
+    h += '<div class="list">' + OBD.dtcs.map(function(code){
+      return '<div class="alert bad" style="justify-content:space-between">'+
+        '<span><b>'+esc(code)+'</b> — Active / Pending Engine Fault</span>'+
+        '<button class="btn small primary" type="button" onclick="obdLogDtcToRepairs(\''+esc(code)+'\')">+ Auto-Add to Repairs</button>'+
+      '</div>';
+    }).join("") + '</div>';
+  } else {
+    h += '<div class="hint">No active fault codes detected. Tap Scan Codes while ignition is ON.</div>';
+  }
+  h += '</div>';
+
+  h += '<div><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'+
+         '<h2>ELM327 AT / PID Console</h2>'+
+         '<button class="btn small" type="button" onclick="obdDownloadTraceLog()">📥 Export OBD Log</button>'+
+       '</div>'+
+       '<div class="obd-term" id="obd-term-box">'+OBD.logs.map(esc).join("<br>")+'</div></div>';
+
+  el.innerHTML = h;
+}
+
+async function boot(){
+  dl = true;
+  initTripForm();
+  $$(".tabs button").forEach(function(b){b.addEventListener("click",function(){go(b.dataset.tab)})});
+  renderAll();
+
+  try {
+    await window.OfflineDB.init();
+    db = window.OfflineDB.db;
+
+    var snap = await db.collection("fuels").get();
+    if(snap.empty){
+      await resetAndImportHistoricalData(true);
+    }
+
+    db.collection("fuels").onSnapshot(function(s){S.fuels=toArr(s);mark("fuels");if(S.tab==="fuel")renderFuelPage();});
+    db.collection("trips").onSnapshot(function(s){S.trips=toArr(s);mark("trips");if(S.tab==="trip")renderTripsPage();});
+    db.collection("snags").onSnapshot(function(s){S.snags=toArr(s);mark("snags");if(S.tab==="snags")renderSnags();});
+    db.collection("maint").onSnapshot(function(s){S.maint=toArr(s);mark("maint");});
+    db.doc("config/vehicle").onSnapshot(function(s){if(s.exists){S.cfg=s.data()||{};}mark("cfg");});
+    markAllLoaded();
+  } catch(e) {
+    markAllLoaded();
+    toast("Storage notice: " + errText(e));
+  }
+}
+boot();
+})();
+</script>
+</body></html>

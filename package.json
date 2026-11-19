@@ -1,0 +1,14 @@
+{
+  "name": "car-tech-obd2",
+  "version": "5.0.0",
+  "description": "Offline SQLite + Kingbolen ELM327 CAN/MAP OBD2 Vehicle Log for Toyota Belta 1.0L",
+  "scripts": {
+    "build": "echo 'Static web assets ready'"
+  },
+  "dependencies": {
+    "@capacitor/android": "^6.0.0",
+    "@capacitor/cli": "^6.0.0",
+    "@capacitor/core": "^6.0.0",
+    "@capacitor-community/sqlite": "^6.0.0"
+  }
+}

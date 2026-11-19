@@ -1,0 +1,6 @@
+{
+  "appId": "com.maqsood.cartechlog.obd2",
+  "appName": "Car-Tech-OBD2",
+  "webDir": "www",
+  "bundledWebRuntime": false
+}
