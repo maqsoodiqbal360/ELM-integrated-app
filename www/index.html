@@ -357,19 +357,18 @@ details.add>summary::-webkit-details-marker{display:none}
   display:grid;grid-template-columns:repeat(7,1fr);gap:1px;
   padding:6px max(2px,env(safe-area-inset-right,0px)) calc(6px + env(safe-area-inset-bottom,0px)) max(2px,env(safe-area-inset-left,0px))}
 .tabs button{font-size:9px;letter-spacing:.03em;padding:6px 1px}
-.efis-cockpit{background:linear-gradient(180deg, rgba(16,28,48,0.96) 0%, var(--surface) 100%);border:1px solid var(--line);border-radius:14px;padding:14px;display:flex;flex-direction:column;gap:12px}
-.efis-topbar{display:flex;justify-content:space-between;align-items:center;gap:8px;padding-bottom:8px;border-bottom:1px solid var(--line)}
-.efis-tag{font-family:var(--f-data);font-size:11px;font-weight:700;letter-spacing:.06em;color:var(--chart-maint);background:rgba(96,165,250,0.12);padding:3px 8px;border-radius:6px;border:1px solid rgba(96,165,250,0.35)}
-.efis-pfd-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
-.efis-cell{background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
-.efis-lbl{font-family:var(--f-data);font-size:10px;letter-spacing:.06em;color:var(--muted);display:flex;justify-content:space-between;align-items:center;gap:4px}
-.efis-bug{font-size:9px;padding:1px 5px;border-radius:4px;background:rgba(242,177,76,0.16);color:var(--warn)}
-.efis-big{font-family:var(--f-data);font-size:36px;font-weight:700;line-height:1.05;margin:4px 0;font-variant-numeric:tabular-nums}
-.efis-sub{font-family:var(--f-data);font-size:11px;color:var(--muted);line-height:1.35}
-.efis-telemetry-bar{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:8px}
-.efis-telemetry-bar div{text-align:center;font-family:var(--f-data)}
-.efis-telemetry-bar span{display:block;font-size:9px;color:var(--muted);letter-spacing:.06em}
-.efis-telemetry-bar b{font-size:13px;color:var(--ink)}
+.thar-baja-shell{background:linear-gradient(160deg, #1A1614 0%, #10131A 60%, var(--surface) 100%);border:2px solid #3B322C;border-radius:18px;padding:14px;display:flex;flex-direction:column;gap:12px;box-shadow:inset 0 1px 0 rgba(255,255,255,0.08)}
+.thar-header-strip{display:flex;justify-content:space-between;align-items:center;gap:8px;padding-bottom:8px;border-bottom:1px solid #2E2824}
+.thar-badge{font-family:var(--f-data);font-size:11px;font-weight:700;letter-spacing:.07em;color:#FF9E44;background:rgba(212,71,11,0.18);padding:4px 10px;border-radius:99px;border:1px solid rgba(255,158,68,0.4)}
+.thar-pods-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.thar-pod{background:radial-gradient(circle at 50% 25%, rgba(255,122,61,0.09), #0D1118 75%);border:2px solid #362E29;border-radius:18px;padding:14px 12px;text-align:center;box-shadow:0 6px 18px rgba(0,0,0,0.35)}
+.thar-pod-top{display:flex;justify-content:space-between;align-items:center;font-family:var(--f-data);font-size:10px;font-weight:700;letter-spacing:.06em;color:var(--muted)}
+.thar-pod-val{font-family:var(--f-data);font-size:38px;font-weight:700;line-height:1.05;margin:8px 0 2px;font-variant-numeric:tabular-nums}
+.thar-pod-unit{font-family:var(--f-data);font-size:11px;color:var(--muted);margin-bottom:6px}
+.thar-mid-panel{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;background:rgba(12,16,24,0.85);border:1px solid #2F2924;border-radius:10px;padding:8px}
+.thar-mid-panel div{text-align:center;font-family:var(--f-data)}
+.thar-mid-panel span{display:block;font-size:9px;color:var(--muted);letter-spacing:.06em}
+.thar-mid-panel b{font-size:13px;color:var(--ink)}
 .warn-strip{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:12px}
 .wlamp{background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:8px 6px;text-align:center;font-family:var(--f-data);font-size:10px;font-weight:700;opacity:.38;transition:all .2s}
 .wlamp.on{opacity:1}
@@ -2128,13 +2127,13 @@ window.importFromPastedText = async function(){
 
 
 /* ==========================================================================
-   TAB 6 & 7: KINGBOLEN ELM327 OBD2 + AIRBUS EFIS COCKPIT CLUSTER (1KR-FE)
+   TAB 6 & 7: KINGBOLEN ELM327 OBD2 + THAR TWIN-POD CLUSTER (1KR-FE)
    ========================================================================== */
 var OBD = {
   connected: false,
   simMode: false,
   simProfile: "CITY", // "CITY", "HIGHWAY", "MANUAL"
-  simThrottle: 20,
+  simThrottle: 25,
   simBrake: 0,
   simHoldingGas: false,
   simHoldingBrake: false,
@@ -2160,7 +2159,7 @@ var OBD = {
   avgKmL: null,
   kmLSamples: [],
   dtcs: [],
-  logs: ["Ready. Tap 'Desk Simulator' for live test or 'Connect ELM327' in car."],
+  logs: ["Ready. Tap 'Start Desk Sim' on Cluster or OBD2 tab, or 'Connect ELM327' in car."],
   fullTrace: [],
   tripActive: false,
   tripStartDep: "",
@@ -2214,56 +2213,55 @@ window.obdDownloadTraceLog = async function(){
 function stepDeskSimulator(){
   if(!OBD.simMode) return;
   if(OBD.simHoldingGas){
-    OBD.simThrottle = Math.min(100, OBD.simThrottle + 12);
+    OBD.simThrottle = Math.min(100, OBD.simThrottle + 14);
     OBD.simBrake = 0;
   } else if(OBD.simHoldingBrake){
-    OBD.simBrake = Math.min(100, OBD.simBrake + 18);
-    OBD.simThrottle = Math.max(0, OBD.simThrottle - 15);
+    OBD.simBrake = Math.min(100, OBD.simBrake + 20);
+    OBD.simThrottle = Math.max(0, OBD.simThrottle - 18);
   }
 
   if(OBD.simProfile === "HIGHWAY"){
-    var targetSpd = OBD.simBrake > 15 ? Math.max(20, 108 - OBD.simBrake * 0.7) : (104 + Math.round(Math.random() * 8));
+    var targetSpd = OBD.simBrake > 15 ? Math.max(20, 112 - OBD.simBrake * 0.7) : (106 + Math.round(Math.random() * 8));
     OBD.speed = Math.round(OBD.speed * 0.65 + targetSpd * 0.35);
-    OBD.throttle = OBD.simBrake > 15 ? 8 : (42 + Math.round(Math.random() * 10));
-    OBD.rpm = Math.round(2450 + (OBD.speed * 6.5) + (Math.random() * 90));
-    OBD.mapKpa = Math.round(44 + (OBD.throttle * 0.25));
-    OBD.load = Math.round(38 + (OBD.throttle * 0.4));
+    OBD.throttle = OBD.simBrake > 15 ? 8 : (44 + Math.round(Math.random() * 10));
+    OBD.rpm = Math.round(2480 + (OBD.speed * 6.5) + (Math.random() * 90));
+    OBD.mapKpa = Math.round(45 + (OBD.throttle * 0.25));
+    OBD.load = Math.round(40 + (OBD.throttle * 0.4));
     OBD.coolant = 90;
     OBD.iat = 33;
     OBD.stft = (-0.8 + (Math.random() * 1.4)).toFixed(1);
-    OBD.cvtRatio = (0.78 + (Math.random() * 0.08)).toFixed(2);
+    OBD.cvtRatio = (0.76 + (Math.random() * 0.08)).toFixed(2);
   } else if(OBD.simProfile === "MANUAL"){
     var thr = OBD.simThrottle;
     var brk = OBD.simBrake;
     OBD.throttle = thr;
     if(brk > 10){
-      OBD.speed = Math.max(0, Math.round(OBD.speed - (brk * 0.14)));
-      OBD.rpm = Math.max(720, Math.round(740 + (thr * 8)));
+      OBD.speed = Math.max(0, Math.round(OBD.speed - (brk * 0.15)));
+      OBD.rpm = Math.max(730, Math.round(740 + (thr * 8)));
     } else if(thr > 12){
-      OBD.speed = Math.min(160, Math.round(OBD.speed + ((thr - 12) * 0.09)));
-      OBD.rpm = Math.min(6400, Math.round(760 + (thr * 42) + (Math.random() * 80)));
+      OBD.speed = Math.min(160, Math.round(OBD.speed + ((thr - 12) * 0.10)));
+      OBD.rpm = Math.min(6400, Math.round(760 + (thr * 44) + (Math.random() * 80)));
     } else {
-      OBD.speed = Math.max(0, Math.round(OBD.speed * 0.92));
-      OBD.rpm = Math.round(730 + (Math.random() * 40));
+      OBD.speed = Math.max(0, Math.round(OBD.speed * 0.90));
+      OBD.rpm = Math.round(735 + (Math.random() * 40));
     }
     OBD.mapKpa = Math.round(30 + (thr * 0.55));
     OBD.load = Math.round(18 + (thr * 0.65));
     OBD.coolant = 89;
     OBD.iat = 32;
-    OBD.stft = (thr > 85 ? 7.4 : (-1.2 + (Math.random() * 1.8))).toFixed(1);
+    OBD.stft = (thr > 85 ? 7.6 : (-1.2 + (Math.random() * 1.8))).toFixed(1);
     OBD.cvtRatio = (OBD.speed > 15 ? Math.max(0.62, 1.85 - (OBD.speed * 0.008)) : 1.42).toFixed(2);
   } else {
-    // CITY profile
-    var baseSpd = OBD.tripActive ? (46 + Math.round(Math.random() * 22)) : (Math.random() > 0.5 ? 24 : 0);
+    var baseSpd = OBD.tripActive ? (48 + Math.round(Math.random() * 20)) : (26 + Math.round(Math.random() * 16));
     OBD.speed = Math.round(OBD.speed * 0.6 + baseSpd * 0.4);
-    OBD.throttle = OBD.speed > 5 ? (22 + Math.round(Math.random() * 16)) : 12;
-    OBD.rpm = OBD.speed > 5 ? Math.round(1350 + (OBD.speed * 24) + (Math.random() * 110)) : (730 + Math.round(Math.random() * 45));
-    OBD.mapKpa = OBD.speed > 5 ? (42 + Math.round(Math.random() * 14)) : 32;
-    OBD.load = OBD.speed > 5 ? (34 + Math.round(Math.random() * 15)) : 21;
+    OBD.throttle = OBD.speed > 5 ? (24 + Math.round(Math.random() * 14)) : 12;
+    OBD.rpm = OBD.speed > 5 ? Math.round(1380 + (OBD.speed * 24) + (Math.random() * 100)) : (740 + Math.round(Math.random() * 45));
+    OBD.mapKpa = OBD.speed > 5 ? (42 + Math.round(Math.random() * 12)) : 32;
+    OBD.load = OBD.speed > 5 ? (35 + Math.round(Math.random() * 14)) : 22;
     OBD.coolant = 88;
     OBD.iat = 32;
-    OBD.stft = (-1.4 + (Math.random() * 2.2)).toFixed(1);
-    OBD.cvtRatio = (1.15 + (Math.random() * 0.35)).toFixed(2);
+    OBD.stft = (-1.3 + (Math.random() * 2.0)).toFixed(1);
+    OBD.cvtRatio = (1.15 + (Math.random() * 0.30)).toFixed(2);
   }
 
   OBD.volt = 13.8;
@@ -2287,24 +2285,24 @@ window.obdStartSimulator = function(profile){
   OBD.connected = true;
   OBD.simMode = true;
   if(profile) OBD.simProfile = profile;
-  OBD.m21Variant = "SIM-" + OBD.simProfile;
+  OBD.m21Variant = "THAR-SIM";
   OBD.volt = 13.8;
-  OBD.rpm = 760;
-  OBD.speed = OBD.simProfile === "HIGHWAY" ? 105 : 38;
+  OBD.rpm = 1850;
+  OBD.speed = OBD.simProfile === "HIGHWAY" ? 108 : 42;
   OBD.coolant = 88;
-  OBD.mapKpa = 36;
+  OBD.mapKpa = 38;
   OBD.iat = 32;
-  OBD.load = 26;
-  OBD.throttle = 18;
-  OBD.stft = "-1.2";
+  OBD.load = 28;
+  OBD.throttle = 22;
+  OBD.stft = "-1.1";
   OBD.avgKmL = OBD.simProfile === "HIGHWAY" ? 16.4 : 12.8;
-  obdLog("🧪 Desk Simulator ACTIVE (" + OBD.simProfile + " profile).");
+  obdLog("🚙 Thar Desk Simulator ACTIVE (" + OBD.simProfile + ").");
 
   stepDeskSimulator();
-  OBD.pollTimer = setInterval(stepDeskSimulator, 750);
+  OBD.pollTimer = setInterval(stepDeskSimulator, 700);
   if(S.tab === "obd") renderObdPage();
   if(S.tab === "cluster") renderClusterPage();
-  toast("🧪 Desk Simulator Active (" + OBD.simProfile + ")");
+  toast("🚙 Thar Desk Simulator Active (" + OBD.simProfile + ")");
 };
 
 window.setSimControl = function(key, val){
@@ -2537,12 +2535,12 @@ function evaluateBeltaHealth(){
   var dtcAlert = (OBD.dtcs && OBD.dtcs.length > 0);
 
   var alerts = [];
-  if(speedAlert) alerts.push({ type: "warn", text: "🚨 OVERSPEED: " + speed + " km/h (Limit: " + CLUSTER_CFG.speedLimit + " km/h)" });
-  if(tempAlert) alerts.push({ type: "bad", text: "🌡️ COOLANT HIGH: " + coolant + "°C (Limit: " + CLUSTER_CFG.tempLimit + "°C)" });
+  if(speedAlert) alerts.push({ type: "warn", text: "🚨 SPEED LIMIT ALERT: " + speed + " km/h (Limit: " + CLUSTER_CFG.speedLimit + " km/h)" });
+  if(tempAlert) alerts.push({ type: "bad", text: "🌡️ OVERHEAT ALERT: Coolant at " + coolant + "°C (Limit: " + CLUSTER_CFG.tempLimit + "°C)" });
   if(misfireLevel === "ALERT") alerts.push({ type: "bad", text: misfireTitle + " — " + misfireDetail });
   else if(misfireLevel === "WARN") alerts.push({ type: "warn", text: misfireTitle });
-  if(battLow) alerts.push({ type: "warn", text: "🔋 LOW BATT: " + volt.toFixed(1) + "V" });
-  if(battHigh) alerts.push({ type: "bad", text: "⚡ HIGH VOLT: " + volt.toFixed(1) + "V" });
+  if(battLow) alerts.push({ type: "warn", text: "🔋 LOW VOLTAGE: " + volt.toFixed(1) + "V" });
+  if(battHigh) alerts.push({ type: "bad", text: "⚡ HIGH VOLTAGE: " + volt.toFixed(1) + "V" });
   if(dtcAlert) alerts.push({ type: "bad", text: "🛑 DTC ACTIVE: " + OBD.dtcs.join(", ") });
 
   return {
@@ -2570,13 +2568,14 @@ window.updateClusterThresholds = function(){
     lsSet("ctl_tmp_lim", String(tm));
   }
   renderClusterPage();
-  toast("Airbus cluster bugs updated (" + CLUSTER_CFG.speedLimit + " km/h, " + CLUSTER_CFG.tempLimit + "°C)");
+  toast("Thar cluster alerts updated (" + CLUSTER_CFG.speedLimit + " km/h, " + CLUSTER_CFG.tempLimit + "°C)");
 };
 
 function syncClusterLiveDom(){
   if(S.tab !== "cluster") return;
   var h = evaluateBeltaHealth();
-  var elSpd = $("#cl-spd"), elRpm = $("#cl-rpm"), elTmp = $("#cl-tmp"), elAvg = $("#cl-avg"), elVlt = $("#cl-vlt"), elLoad = $("#cl-load"), elTps = $("#cl-tps"), elIat = $("#cl-iat"), elStft = $("#cl-stft");
+  var elSpd = $("#cl-spd"), elRpm = $("#cl-rpm"), elTmp = $("#cl-tmp"), elAvg = $("#cl-avg"), elVlt = $("#cl-vlt"), elMap = $("#cl-map"), elTps = $("#cl-tps"), elIat = $("#cl-iat"), elStft = $("#cl-stft");
+  var barSpd = $("#cl-spd-bar"), barRpm = $("#cl-rpm-bar");
   if(elSpd){
     elSpd.textContent = OBD.speed || 0;
     elSpd.style.color = h.speedAlert ? "var(--bad)" : "var(--ink)";
@@ -2585,13 +2584,23 @@ function syncClusterLiveDom(){
     elRpm.textContent = OBD.rpm || 0;
     elRpm.style.color = (OBD.rpm > 5500) ? "var(--bad)" : "var(--ink)";
   }
+  if(barSpd){
+    var sPct = Math.min(100, Math.max(0, Math.round(((OBD.speed || 0) / 180) * 100)));
+    barSpd.style.width = sPct + "%";
+    barSpd.className = "prog-fill " + (h.speedAlert ? "bad" : "good");
+  }
+  if(barRpm){
+    var rPct = Math.min(100, Math.max(0, Math.round(((OBD.rpm || 0) / 7000) * 100)));
+    barRpm.style.width = rPct + "%";
+    barRpm.className = "prog-fill " + ((OBD.rpm||0) > 5500 ? "bad" : "good");
+  }
   if(elTmp){
     elTmp.textContent = OBD.coolant != null ? (OBD.coolant + "°C") : "--";
     elTmp.style.color = h.tempAlert ? "var(--bad)" : "var(--ink)";
   }
   if(elAvg) elAvg.textContent = OBD.avgKmL != null ? (OBD.avgKmL.toFixed(1) + " km/L") : "--";
   if(elVlt) elVlt.textContent = OBD.volt != null ? (OBD.volt.toFixed(1) + "V") : "--";
-  if(elLoad) elLoad.textContent = OBD.load != null ? (OBD.load + "%") : (OBD.mapKpa != null ? (OBD.mapKpa + "kPa") : "--");
+  if(elMap) elMap.textContent = OBD.mapKpa != null ? (OBD.mapKpa + " kPa") : "--";
   if(elTps) elTps.textContent = OBD.throttle != null ? (OBD.throttle + "%") : "--";
   if(elIat) elIat.textContent = OBD.iat != null ? (OBD.iat + "°C") : "--";
   if(elStft) elStft.textContent = OBD.stft != null ? ((parseFloat(OBD.stft)>0?"+":"") + OBD.stft + "%") : "--";
@@ -2613,34 +2622,34 @@ function renderClusterPage(){
   var h = evaluateBeltaHealth();
   var rpmPct = Math.min(100, Math.max(0, Math.round(((OBD.rpm || 0) / 7000) * 100)));
   var spdPct = Math.min(100, Math.max(0, Math.round(((OBD.speed || 0) / 180) * 100)));
-  var gear = (OBD.speed || 0) > 2 ? "D" : "P / N";
+  var driveMode = (OBD.speed || 0) > 2 ? "4x2 / D" : "4H / IDLE";
 
-  var out = '<div class="efis-cockpit">' +
-    '<div class="efis-topbar">' +
-      '<div><span class="efis-tag">A/C: TOYOTA BELTA 1.0L • 1KR-FE</span></div>' +
-      '<div style="font-family:var(--f-data);font-size:11px;color:var(--good)">' + (OBD.connected ? (OBD.simMode ? 'SIM ● LIVE' : 'ECU ● ONLINE') : 'STBY') + ' • <b id="cl-vlt">' + (OBD.volt ? OBD.volt.toFixed(1) + 'V' : '--') + '</b></div>' +
+  var out = '<div class="thar-baja-shell">' +
+    '<div class="thar-header-strip">' +
+      '<div class="thar-badge">THAR TWIN-POD • 1KR-FE</div>' +
+      '<div style="font-family:var(--f-data);font-size:11px;font-weight:700;color:' + (OBD.connected ? 'var(--good)' : 'var(--muted)') + '">' + (OBD.connected ? (OBD.simMode ? 'SIM ● LIVE' : 'ECU ● ONLINE') : 'STANDBY') + ' • <span id="cl-vlt">' + (OBD.volt ? OBD.volt.toFixed(1) + 'V' : '--') + '</span></div>' +
     '</div>' +
 
-    '<div class="efis-pfd-grid">' +
-      '<div class="efis-cell" style="border-top:3px solid var(--chart-maint)">' +
-        '<div class="efis-lbl">VEL // PRIMARY AIRSPEED <span class="efis-bug">SPD BUG ' + CLUSTER_CFG.speedLimit + '</span></div>' +
-        '<div class="efis-big" id="cl-spd" style="color:' + (h.speedAlert ? 'var(--bad)' : 'var(--ink)') + '">' + (OBD.speed || 0) + '</div>' +
-        '<div class="efis-sub">KM/H • GEAR <b style="color:var(--good)">' + gear + '</b> • AVG <b id="cl-avg" style="color:var(--good)">' + (OBD.avgKmL != null ? OBD.avgKmL.toFixed(1) + ' km/L' : '--') + '</b></div>' +
-        '<div class="prog-track"><div class="prog-fill ' + (h.speedAlert ? 'bad' : 'good') + '" style="width:' + spdPct + '%"></div></div>' +
+    '<div class="thar-pods-grid">' +
+      '<div class="thar-pod">' +
+        '<div class="thar-pod-top"><span>SPEEDOMETER</span><span>LIM ' + CLUSTER_CFG.speedLimit + '</span></div>' +
+        '<div class="thar-pod-val" id="cl-spd" style="color:' + (h.speedAlert ? 'var(--bad)' : 'var(--ink)') + '">' + (OBD.speed || 0) + '</div>' +
+        '<div class="thar-pod-unit">KM/H • <b style="color:var(--accent)">' + driveMode + '</b></div>' +
+        '<div class="prog-track"><div id="cl-spd-bar" class="prog-fill ' + (h.speedAlert ? 'bad' : 'good') + '" style="width:' + spdPct + '%"></div></div>' +
       '</div>' +
 
-      '<div class="efis-cell" style="border-top:3px solid var(--accent)">' +
-        '<div class="efis-lbl">ENG // TACHOMETER <span class="efis-bug" style="color:var(--bad)">REDLINE 6200</span></div>' +
-        '<div class="efis-big" id="cl-rpm">' + (OBD.rpm || 0) + '</div>' +
-        '<div class="efis-sub">RPM • CVT RATIO <b>' + esc(OBD.cvtRatio) + '</b> • COOLANT <b id="cl-tmp" style="color:' + (h.tempAlert ? 'var(--bad)' : 'var(--ink)') + '">' + (OBD.coolant != null ? OBD.coolant + '°C' : '--') + '</b></div>' +
-        '<div class="prog-track"><div class="prog-fill ' + ((OBD.rpm||0)>5500 ? 'bad' : 'good') + '" style="width:' + rpmPct + '%"></div></div>' +
+      '<div class="thar-pod">' +
+        '<div class="thar-pod-top"><span>TACHOMETER</span><span style="color:var(--bad)">MAX 6.2k</span></div>' +
+        '<div class="thar-pod-val" id="cl-rpm">' + (OBD.rpm || 0) + '</div>' +
+        '<div class="thar-pod-unit">RPM • CVT <b>' + esc(OBD.cvtRatio) + '</b></div>' +
+        '<div class="prog-track"><div id="cl-rpm-bar" class="prog-fill ' + ((OBD.rpm||0)>5500 ? 'bad' : 'good') + '" style="width:' + rpmPct + '%"></div></div>' +
       '</div>' +
     '</div>' +
 
-    '<div class="efis-telemetry-bar">' +
-      '<div><span>LOAD</span><b id="cl-load">' + (OBD.load != null ? OBD.load + '%' : (OBD.mapKpa != null ? OBD.mapKpa + 'kPa' : '--')) + '</b></div>' +
-      '<div><span>TPS</span><b id="cl-tps">' + (OBD.throttle != null ? OBD.throttle + '%' : '--') + '</b></div>' +
-      '<div><span>IAT</span><b id="cl-iat">' + (OBD.iat != null ? OBD.iat + '°C' : '--') + '</b></div>' +
+    '<div class="thar-mid-panel">' +
+      '<div><span>COOLANT</span><b id="cl-tmp" style="color:' + (h.tempAlert ? 'var(--bad)' : 'var(--ink)') + '">' + (OBD.coolant != null ? OBD.coolant + '°C' : '--') + '</b></div>' +
+      '<div><span>ECONOMY</span><b id="cl-avg" style="color:var(--good)">' + (OBD.avgKmL != null ? OBD.avgKmL.toFixed(1) + ' km/L' : '--') + '</b></div>' +
+      '<div><span>MAP</span><b id="cl-map">' + (OBD.mapKpa != null ? OBD.mapKpa + ' kPa' : '--') + '</b></div>' +
       '<div><span>STFT</span><b id="cl-stft">' + (OBD.stft != null ? ((parseFloat(OBD.stft)>0?"+":"") + OBD.stft + '%') : '--') + '</b></div>' +
     '</div>' +
 
@@ -2656,25 +2665,43 @@ function renderClusterPage(){
     '</div>' +
   '</div>';
 
-  out += '<div><h2>ECAM // Active Alerts & 1KR-FE Health</h2><div class="list">';
+  // Direct functional simulator & pedal deck inside Cluster tab so user doesn't have to switch tabs
+  out += '<div class="card form" style="border-left:4px solid var(--accent)">' +
+    '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">' +
+      '<b>🎮 Cluster Simulator & Drive Controls</b>' +
+      '<div class="btns">' +
+        '<button class="btn small primary" type="button" onclick="obdStartSimulator(\'CITY\')">▶ Start Desk Sim</button>' +
+        '<button class="btn small" type="button" onclick="obdStartSimulator(\'HIGHWAY\')">Highway 100+</button>' +
+        '<button class="btn small" type="button" onclick="obdStartSimulator(\'MANUAL\')">Manual</button>' +
+      '</div>' +
+    '</div>' +
+    '<div class="grid2">' +
+      '<label class="fld"><span>Throttle (' + OBD.simThrottle + '%)</span><input type="range" min="0" max="100" value="' + OBD.simThrottle + '" oninput="setSimControl(\'throttle\', this.value)"></label>' +
+      '<label class="fld"><span>Brake (' + OBD.simBrake + '%)</span><input type="range" min="0" max="100" value="' + OBD.simBrake + '" oninput="setSimControl(\'brake\', this.value)"></label>' +
+    '</div>' +
+    '<div class="btns">' +
+      '<button class="btn small primary" type="button" onclick="setSimControl(\'gasHold\', !OBD.simHoldingGas)">' + (OBD.simHoldingGas ? '⚡ Release Gas' : '⚡ Hold Gas') + '</button>' +
+      '<button class="btn small danger" type="button" onclick="setSimControl(\'brakeHold\', !OBD.simHoldingBrake)">' + (OBD.simHoldingBrake ? '🛑 Release Brake' : '🛑 Hold Brake') + '</button>' +
+    '</div>' +
+  '</div>';
+
+  out += '<div><h2>Active Alerts & 1KR-FE Misfire Monitor</h2><div class="list">';
   if(h.alerts.length){
     out += h.alerts.map(function(a){
       return '<div class="alert ' + a.type + '">' + a.text + '</div>';
     }).join("");
   } else {
-    out += '<div class="alert good">ECAM NORMAL: ' + esc(h.misfireTitle) + ' • Speed, Temp & Battery within limits.</div>';
+    out += '<div class="alert good">✅ ' + esc(h.misfireTitle) + ' • Speed, Temp & Battery normal.</div>';
   }
   out += '</div></div>';
 
-  out += '<div><h2>EFIS Alert Bugs & Quick Sim</h2><div class="card form">' +
+  out += '<div><h2>Alert Thresholds</h2><div class="card form">' +
     '<div class="grid2">' +
-      '<label class="fld"><span>Speed Bug (km/h)</span><input type="number" id="cl-spd-lim" value="' + CLUSTER_CFG.speedLimit + '" min="20" max="240"></label>' +
-      '<label class="fld"><span>Coolant Bug (°C)</span><input type="number" id="cl-tmp-lim" value="' + CLUSTER_CFG.tempLimit + '" min="75" max="125"></label>' +
+      '<label class="fld"><span>Speed Alert (km/h)</span><input type="number" id="cl-spd-lim" value="' + CLUSTER_CFG.speedLimit + '" min="20" max="240"></label>' +
+      '<label class="fld"><span>Coolant Overheat Alert (°C)</span><input type="number" id="cl-tmp-lim" value="' + CLUSTER_CFG.tempLimit + '" min="75" max="125"></label>' +
     '</div>' +
     '<div class="btns">' +
-      '<button class="btn small primary" type="button" onclick="updateClusterThresholds()">Save Bugs</button>' +
-      '<button class="btn small" type="button" onclick="obdStartSimulator(\'CITY\')">Sim City</button>' +
-      '<button class="btn small" type="button" onclick="obdStartSimulator(\'HIGHWAY\')">Sim Highway 100+</button>' +
+      '<button class="btn small primary" type="button" onclick="updateClusterThresholds()">Save Alert Limits</button>' +
     '</div>' +
   '</div></div>';
 
