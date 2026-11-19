@@ -143,7 +143,7 @@ public class MainActivity extends BridgeActivity {
 
         @JavascriptInterface
         public boolean isConnected() {
-            return btSocket != null && btSocket.isConnected();
+            return btSocket != null && btSocket.isConnected() && outStream != null && inStream != null;
         }
 
         @JavascriptInterface

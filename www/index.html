@@ -2103,7 +2103,7 @@ window.importFromPastedText = async function(){
 
 
 /* ==========================================================================
-   TAB 6: KINGBOLEN ELM327 BLUETOOTH OBD2 ENGINE (BELTA 1KR-FE CAN/MAP)
+   TAB 6: KINGBOLEN ELM327 BLUETOOTH OBD2 ENGINE (BELTA 1KR-FE CAN 7E0 FIX)
    ========================================================================== */
 var OBD = {
   connected: false,
@@ -2126,7 +2126,7 @@ var OBD = {
   avgKmL: null,
   kmLSamples: [],
   dtcs: [],
-  logs: ["System ready. Ensure Car Scanner Pro is DISCONNECTED before connecting here."],
+  logs: ["Ready. Close Car Scanner Pro completely, then tap Connect ELM327."],
   fullTrace: [],
   tripActive: false,
   tripStartDep: "",
@@ -2138,7 +2138,7 @@ function obdLog(msg){
   var line = "[" + new Date().toISOString().slice(11,23) + "] " + msg;
   OBD.logs.unshift(line);
   OBD.fullTrace.push(line);
-  if(OBD.logs.length > 35) OBD.logs.pop();
+  if(OBD.logs.length > 40) OBD.logs.pop();
   var box = $("#obd-term-box");
   if(box) box.innerHTML = OBD.logs.map(esc).join("<br>");
 }
@@ -2165,7 +2165,7 @@ window.obdDownloadTraceLog = async function(){
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    toast("✅ OBD Log downloaded & copied to clipboard!");
+    toast("✅ OBD Log downloaded & copied!");
   } catch(e) {
     toast("✅ OBD Log copied to clipboard!");
   }
@@ -2179,12 +2179,10 @@ window.obdRefreshDevices = function(){
       OBD.devices = JSON.parse(raw || "[]");
       var obdDev = OBD.devices.find(function(d){ return /obd|elm|vlink/i.test(d.name); });
       if(obdDev && !OBD.deviceAddr) OBD.deviceAddr = obdDev.address;
-      obdLog("Paired devices found: " + JSON.stringify(OBD.devices));
+      obdLog("Paired devices: " + OBD.devices.map(function(d){return d.name+"("+d.address+")"}).join(", "));
     } catch(e) {
       obdLog("Scan error: " + errText(e));
     }
-  } else {
-    obdLog("ERROR: AndroidOBD native interface not detected in WebView.");
   }
   if(S.tab === "obd") renderObdPage();
 };
@@ -2192,27 +2190,37 @@ window.obdRefreshDevices = function(){
 window.obdChangeProtocol = function(newProto){
   OBD.protocol = newProto;
   lsSet("ctl_obd_proto", newProto);
-  obdLog("Protocol switched to: " + newProto);
+  obdLog("Protocol selected: " + newProto);
   if(OBD.connected && window.AndroidOBD){
-    var r = window.AndroidOBD.sendCommand(newProto, 800);
-    obdLog("Live " + newProto + " -> " + r);
-    var r0100 = window.AndroidOBD.sendCommand("0100", 1500);
-    obdLog("ECU Handshake 0100 -> " + r0100);
+    OBD.polling = true;
+    try {
+      obdLog("Applying " + newProto + " => " + window.AndroidOBD.sendCommand(newProto, 800));
+      obdLog("Setting Header 7E0 => " + window.AndroidOBD.sendCommand("ATSH7E0", 500));
+      obdLog("Probe 0100 => " + window.AndroidOBD.sendCommand("0100", 1500));
+    } finally {
+      OBD.polling = false;
+    }
   }
 };
 
-function parseHexBytes(resp){
-  if(!resp || /NO DATA|UNABLE|ERROR|STOPPED|\?|SEARCHING/i.test(resp)) return null;
-  var clean = resp.replace(/[^0-9A-Fa-f]/g, "");
+// Extract positive Mode 41 response for a specific PID even if multiple ECUs (like 7F0111) reply!
+function extractPidBytes(resp, expectedMode, expectedPid){
+  if(!resp) return null;
+  // Split by spaces or newlines, strip non-hex, find sequence starting with expectedMode + expectedPid
+  var clean = resp.replace(/[^0-9A-Fa-f]/g, "").toUpperCase();
+  var target = expectedMode.toUpperCase() + expectedPid.toUpperCase();
+  var idx = clean.indexOf(target);
+  if(idx === -1) return null;
+  var sub = clean.slice(idx);
   var out = [];
-  for(var i=0; i+1<clean.length; i+=2){
-    out.push(parseInt(clean.slice(i, i+2), 16));
+  for(var i=0; i+1<sub.length; i+=2){
+    out.push(parseInt(sub.slice(i, i+2), 16));
   }
   return out;
 }
 
 function decodeDtcWord(b1, b2){
-  if(b1 === 0 && b2 === 0) return null;
+  if((b1 === 0 && b2 === 0) || (b1 === 0xFF && b2 === 0xFF)) return null;
   var types = ["P", "C", "B", "U"];
   var prefix = types[(b1 >> 6) & 0x03];
   var d1 = (b1 >> 4) & 0x03;
@@ -2242,100 +2250,125 @@ window.obdConnect = async function(silentAuto){
     return;
   }
 
+  if(OBD.pollTimer){ clearInterval(OBD.pollTimer); OBD.pollTimer = null; }
+  OBD.polling = true;
   OBD.deviceAddr = addr;
   lsSet("ctl_obd_addr", addr);
 
-  obdLog("Connecting socket to " + addr + "...");
-  var res = window.AndroidOBD.connect(addr);
-  obdLog("Socket connect result: " + res);
-  if(res !== "OK"){
-    if(!silentAuto) toast(res);
-    return;
+  try {
+    obdLog("Connecting socket to " + addr + "...");
+    var res = window.AndroidOBD.connect(addr);
+    obdLog("Socket connect => " + res);
+    if(res !== "OK"){
+      OBD.connected = false;
+      if(!silentAuto) toast(res);
+      renderObdPage();
+      return;
+    }
+
+    OBD.connected = true;
+    renderObdPage();
+
+    // Clean ELM327 initialization matching Car Scanner Pro for Toyota CAN (ISO 15765-4 11-bit 500k)
+    var initCmds = [
+      ["ATZ", 1600],
+      ["ATE0", 500],
+      ["ATL0", 500],
+      ["ATS0", 500],
+      ["ATH0", 500],
+      ["ATCAF1", 500],
+      [OBD.protocol, 700],
+      ["ATSH7E0", 500],
+      ["ATCRA7E8", 500]
+    ];
+    for(var i=0; i<initCmds.length; i++){
+      var r = window.AndroidOBD.sendCommand(initCmds[i][0], initCmds[i][1]);
+      obdLog(initCmds[i][0] + " => " + (r || "OK"));
+    }
+
+    // Probe Engine ECU directly on 7E0 -> 7E8
+    var p0100 = window.AndroidOBD.sendCommand("0100", 1800);
+    obdLog("Engine ECU 0100 => " + (p0100 || "EMPTY"));
+
+    // If 7E0 filter returns nothing, clear filter (ATAR) and try broadcast 7DF
+    if(!extractPidBytes(p0100, "41", "00")){
+      obdLog("Trying broadcast CAN header 7DF...");
+      window.AndroidOBD.sendCommand("ATAR", 400);
+      window.AndroidOBD.sendCommand("ATSH7DF", 400);
+      var pBroad = window.AndroidOBD.sendCommand("0100", 1800);
+      obdLog("Broadcast 0100 => " + (pBroad || "EMPTY"));
+    }
+
+    var vResp = window.AndroidOBD.sendCommand("ATRV", 500);
+    obdLog("Voltage ATRV => " + vResp);
+    var vm = (vResp || "").match(/([0-9]+\.[0-9]+)/);
+    if(vm) OBD.volt = parseFloat(vm[1]);
+
+    obdScanDtcsInternal();
+    renderObdPage();
+    toast("✅ Connected to Toyota Belta ECU!");
+  } finally {
+    OBD.polling = false;
   }
 
-  OBD.connected = true;
-  var initCmds = ["ATZ", "ATE0", "ATL0", "ATS0", "ATH0", OBD.protocol];
-  for(var i=0; i<initCmds.length; i++){
-    var r = window.AndroidOBD.sendCommand(initCmds[i], initCmds[i]==="ATZ" ? 1600 : 700);
-    obdLog("CMD " + initCmds[i] + " => " + (r || "EMPTY"));
-  }
-
-  var p0100 = window.AndroidOBD.sendCommand("0100", 1800);
-  obdLog("ECU Probe 0100 => " + (p0100 || "EMPTY"));
-  if((!p0100 || /UNABLE|ERROR|NO DATA/i.test(p0100)) && OBD.protocol !== "ATSP0"){
-    obdLog("Retrying with ATSP0 (Auto Protocol)...");
-    window.AndroidOBD.sendCommand("ATSP0", 700);
-    var retry0100 = window.AndroidOBD.sendCommand("0100", 2000);
-    obdLog("Retry 0100 (ATSP0) => " + (retry0100 || "EMPTY"));
-  }
-
-  var vResp = window.AndroidOBD.sendCommand("ATRV", 500);
-  obdLog("CMD ATRV => " + vResp);
-  var vm = (vResp || "").match(/([0-9]+\.[0-9]+)/);
-  if(vm) OBD.volt = parseFloat(vm[1]);
-
-  obdScanDtcs();
-
-  if(OBD.pollTimer) clearInterval(OBD.pollTimer);
-  OBD.pollTimer = setInterval(obdPollTick, 1100);
-  if(S.tab === "obd") renderObdPage();
-  toast("✅ ECU Connected (" + OBD.protocol + ")");
+  OBD.pollTimer = setInterval(obdPollTick, 1000);
 };
 
 window.obdDisconnect = function(){
-  if(OBD.pollTimer) clearInterval(OBD.pollTimer);
-  OBD.pollTimer = null;
+  if(OBD.pollTimer){ clearInterval(OBD.pollTimer); OBD.pollTimer = null; }
+  OBD.polling = false;
   OBD.connected = false;
   if(window.AndroidOBD) window.AndroidOBD.disconnect();
-  obdLog("Socket disconnected.");
+  obdLog("Disconnected cleanly.");
   if(S.tab === "obd") renderObdPage();
 };
 
 function obdPollTick(){
   if(!OBD.connected || OBD.polling || !window.AndroidOBD) return;
   if(!window.AndroidOBD.isConnected()){
-    obdLog("Socket dropped unexpectedly.");
+    obdLog("Bluetooth socket closed.");
     obdDisconnect();
     return;
   }
   OBD.polling = true;
   try {
-    var rawRpm = window.AndroidOBD.sendCommand("010C", 350);
-    var bRpm = parseHexBytes(rawRpm);
-    if(bRpm && bRpm.length >= 4 && bRpm[0] === 0x41 && bRpm[1] === 0x0C){
+    // 010C: RPM
+    var bRpm = extractPidBytes(window.AndroidOBD.sendCommand("010C", 350), "41", "0C");
+    if(bRpm && bRpm.length >= 4){
       OBD.rpm = Math.round(((bRpm[2] * 256) + bRpm[3]) / 4);
     }
 
-    var rawSpd = window.AndroidOBD.sendCommand("010D", 350);
-    var bSpd = parseHexBytes(rawSpd);
-    if(bSpd && bSpd.length >= 3 && bSpd[0] === 0x41 && bSpd[1] === 0x0D){
+    // 010D: Speed (km/h)
+    var bSpd = extractPidBytes(window.AndroidOBD.sendCommand("010D", 350), "41", "0D");
+    if(bSpd && bSpd.length >= 3){
       OBD.speed = bSpd[2];
     }
 
-    var rawTmp = window.AndroidOBD.sendCommand("0105", 350);
-    var bTmp = parseHexBytes(rawTmp);
-    if(bTmp && bTmp.length >= 3 && bTmp[0] === 0x41 && bTmp[1] === 0x05){
+    // 0105: Coolant Temp (C)
+    var bTmp = extractPidBytes(window.AndroidOBD.sendCommand("0105", 350), "41", "05");
+    if(bTmp && bTmp.length >= 3){
       OBD.coolant = bTmp[2] - 40;
     }
 
-    var rawMap = window.AndroidOBD.sendCommand("010B", 350);
-    var bMap = parseHexBytes(rawMap);
-    if(bMap && bMap.length >= 3 && bMap[0] === 0x41 && bMap[1] === 0x0B){
+    // 010B: Intake Manifold Absolute Pressure (kPa)
+    var bMap = extractPidBytes(window.AndroidOBD.sendCommand("010B", 350), "41", "0B");
+    if(bMap && bMap.length >= 3){
       OBD.mapKpa = bMap[2];
     }
 
-    var rawIat = window.AndroidOBD.sendCommand("010F", 300);
-    var bIat = parseHexBytes(rawIat);
-    if(bIat && bIat.length >= 3 && bIat[0] === 0x41 && bIat[1] === 0x0F){
+    // 010F: Intake Air Temp (C)
+    var bIat = extractPidBytes(window.AndroidOBD.sendCommand("010F", 300), "41", "0F");
+    if(bIat && bIat.length >= 3){
       OBD.iat = bIat[2] - 40;
     }
 
-    var rawStft = window.AndroidOBD.sendCommand("0106", 300);
-    var bStft = parseHexBytes(rawStft);
-    if(bStft && bStft.length >= 3 && bStft[0] === 0x41 && bStft[1] === 0x06){
+    // 0106: Short Term Fuel Trim (%)
+    var bStft = extractPidBytes(window.AndroidOBD.sendCommand("0106", 300), "41", "06");
+    if(bStft && bStft.length >= 3){
       OBD.stft = ((bStft[2] - 128) * 100.0 / 128.0).toFixed(1);
     }
 
+    // Speed-Density Fuel Economy Calculation for 1.0L (998cc) 1KR-FE
     if(OBD.rpm > 0 && OBD.mapKpa > 0){
       var tempK = (OBD.iat != null ? OBD.iat : 30) + 273.15;
       var imap = (OBD.rpm * OBD.mapKpa) / (tempK * 2.0);
@@ -2362,39 +2395,60 @@ function obdPollTick(){
 
     if(S.tab === "obd") updateObdLiveDom();
   } catch(e) {
-    obdLog("Poll exception: " + errText(e));
+    obdLog("Poll error: " + errText(e));
   } finally {
     OBD.polling = false;
   }
 }
 
-window.obdScanDtcs = function(){
-  if(!OBD.connected || !window.AndroidOBD){ toast("Connect ELM327 first"); return; }
+function obdScanDtcsInternal(){
+  if(!OBD.connected || !window.AndroidOBD) return;
   obdLog("Scanning ECU Fault Codes (Mode 03 & 07)...");
   var found = [];
-  ["03", "07"].forEach(function(mode){
+  [["03", "43"], ["07", "47"]].forEach(function(pair){
+    var mode = pair[0], posHeader = pair[1];
     var raw = window.AndroidOBD.sendCommand(mode, 900);
     obdLog("Mode " + mode + " => " + (raw || "EMPTY"));
-    var bytes = parseHexBytes(raw);
-    if(bytes && bytes.length >= 3){
-      var startIdx = (bytes[0] === 0x43 || bytes[0] === 0x47) ? 1 : 0;
-      for(var i=startIdx; i+1<bytes.length; i+=2){
-        var code = decodeDtcWord(bytes[i], bytes[i+1]);
-        if(code && found.indexOf(code) === -1) found.push(code);
-      }
+    if(!raw || /NO DATA|UNABLE|ERROR|7F03|7F07/i.test(raw)) return;
+    var clean = raw.replace(/[^0-9A-Fa-f]/g, "").toUpperCase();
+    var idx = clean.indexOf(posHeader);
+    if(idx === -1) return;
+    // Skip positive header (e.g. 43) and optional count byte if length is odd
+    var hexData = clean.slice(idx + 2);
+    if(hexData.length % 4 === 2) hexData = hexData.slice(2);
+    for(var i=0; i+3<hexData.length; i+=4){
+      var b1 = parseInt(hexData.slice(i, i+2), 16);
+      var b2 = parseInt(hexData.slice(i+2, i+4), 16);
+      var code = decodeDtcWord(b1, b2);
+      if(code && found.indexOf(code) === -1) found.push(code);
     }
   });
   OBD.dtcs = found;
+}
+
+window.obdScanDtcs = function(){
+  if(!OBD.connected || !window.AndroidOBD){ toast("Connect ELM327 first"); return; }
+  OBD.polling = true;
+  try {
+    obdScanDtcsInternal();
+  } finally {
+    OBD.polling = false;
+  }
   if(S.tab === "obd") renderObdPage();
-  toast(found.length ? "⚠️ Found " + found.length + " fault code(s)!" : "✅ Zero ECU fault codes");
+  toast(OBD.dtcs.length ? "⚠️ Found " + OBD.dtcs.length + " fault code(s)!" : "✅ Zero ECU fault codes");
 };
 
 window.obdClearDtcs = function(){
   if(!OBD.connected || !window.AndroidOBD) return;
   if(!confirm("Clear Check Engine Light & ECU Fault Codes (Mode 04)?")) return;
-  var r = window.AndroidOBD.sendCommand("04", 1000);
-  obdLog("Clear Codes (04) => " + r);
-  OBD.dtcs = [];
+  OBD.polling = true;
+  try {
+    var r = window.AndroidOBD.sendCommand("04", 1000);
+    obdLog("Clear Codes (04) => " + r);
+    OBD.dtcs = [];
+  } finally {
+    OBD.polling = false;
+  }
   renderObdPage();
   toast("ECU fault codes cleared");
 };
@@ -2472,12 +2526,13 @@ window.obdFinishAndSaveTrip = async function(){
 };
 
 function updateObdLiveDom(){
-  var elRpm = $("#og-rpm"), elSpd = $("#og-spd"), elTmp = $("#og-tmp"), elAvg = $("#og-avg"), elMap = $("#og-map"), elDist = $("#og-trip-dist");
+  var elRpm = $("#og-rpm"), elSpd = $("#og-spd"), elTmp = $("#og-tmp"), elAvg = $("#og-avg"), elMap = $("#og-map"), elStft = $("#og-stft"), elDist = $("#og-trip-dist");
   if(elRpm) elRpm.textContent = OBD.rpm;
   if(elSpd) elSpd.textContent = OBD.speed;
   if(elTmp) elTmp.textContent = OBD.coolant != null ? (OBD.coolant + "°C") : "--";
   if(elAvg) elAvg.textContent = OBD.avgKmL != null ? OBD.avgKmL.toFixed(1) : (OBD.instKmL != null ? OBD.instKmL.toFixed(1) : "--");
   if(elMap) elMap.textContent = OBD.mapKpa != null ? (OBD.mapKpa + " kPa") : "--";
+  if(elStft) elStft.textContent = OBD.stft != null ? (OBD.stft + "%") : "--";
   if(elDist) elDist.textContent = OBD.tripDistKm.toFixed(2) + " km";
 }
 
@@ -2494,7 +2549,7 @@ function renderObdPage(){
 
   var h = '<div class="band ' + (OBD.connected ? 'ok' : 'range') + '">'+
     '<div><div class="lbl">Kingbolen ELM327 Telemetry</div><div class="big">' + (OBD.connected ? 'ECU ONLINE' : 'STANDBY') + '</div></div>'+
-    '<div class="odo"><b>' + (OBD.volt ? OBD.volt.toFixed(1) + ' V' : '12V OBDII') + '</b><span>' + esc(OBD.protocol) + '</span></div>'+
+    '<div class="odo"><b>' + (OBD.volt ? OBD.volt.toFixed(1) + ' V' : '12V OBDII') + '</b><span>' + esc(OBD.protocol) + ' (7E0)</span></div>'+
   '</div>';
 
   h += '<div class="card form">'+
@@ -2508,7 +2563,6 @@ function renderObdPage(){
         '<option value="ATSP6"'+(OBD.protocol==="ATSP6"?' selected':'')+'>ATSP6 (ISO 15765 CAN 500k - Belta)</option>'+
         '<option value="ATSP0"'+(OBD.protocol==="ATSP0"?' selected':'')+'>ATSP0 (Auto Detect)</option>'+
         '<option value="ATSP5"'+(OBD.protocol==="ATSP5"?' selected':'')+'>ATSP5 (JDM KWP Fast)</option>'+
-        '<option value="ATSP4"'+(OBD.protocol==="ATSP4"?' selected':'')+'>ATSP4 (ISO 14230 5-Baud)</option>'+
       '</select></label>'+
     '</div>'+
     '<div class="btns">'+
@@ -2525,7 +2579,7 @@ function renderObdPage(){
     '<div class="gauge"><div class="gk">Coolant Temp</div><div class="gv" id="og-tmp">'+(OBD.coolant!=null?OBD.coolant+'°C':'--')+'</div><div class="gs">Normal 82–95°C</div></div>'+
     '<div class="gauge"><div class="gk">Live Fuel Avg</div><div class="gv" id="og-avg">'+(OBD.avgKmL!=null?OBD.avgKmL.toFixed(1):'--')+'</div><div class="gs">km/L (MAP 1KR-FE)</div></div>'+
     '<div class="gauge"><div class="gk">Intake MAP</div><div class="gv" id="og-map">'+(OBD.mapKpa!=null?OBD.mapKpa+' kPa':'--')+'</div><div class="gs">Idle ~30–35 kPa</div></div>'+
-    '<div class="gauge"><div class="gk">Short Fuel Trim</div><div class="gv">'+(OBD.stft!=null?OBD.stft+'%':'--')+'</div><div class="gs">Healthy -5% to +5%</div></div>'+
+    '<div class="gauge"><div class="gk">Short Fuel Trim</div><div class="gv" id="og-stft">'+(OBD.stft!=null?OBD.stft+'%':'--')+'</div><div class="gs">Healthy -5% to +5%</div></div>'+
   '</div>';
 
   h += '<div class="card form" style="border-left:4px solid var(--good)">'+
