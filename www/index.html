@@ -354,8 +354,20 @@ details.add>summary{list-style:none;cursor:pointer}
 details.add>summary::-webkit-details-marker{display:none}
 .hint{font-size:12.5px;color:var(--muted)}
 .tabs{position:fixed;left:0;right:0;bottom:0;z-index:20;background:var(--surface);border-top:1px solid var(--line);
-  display:grid;grid-template-columns:repeat(6,1fr);gap:1px;
-  padding:6px max(4px,env(safe-area-inset-right,0px)) calc(6px + env(safe-area-inset-bottom,0px)) max(4px,env(safe-area-inset-left,0px))}
+  display:grid;grid-template-columns:repeat(7,1fr);gap:1px;
+  padding:6px max(2px,env(safe-area-inset-right,0px)) calc(6px + env(safe-area-inset-bottom,0px)) max(2px,env(safe-area-inset-left,0px))}
+.tabs button{font-size:9px;letter-spacing:.03em;padding:6px 1px}
+.cluster-hero{background:radial-gradient(circle at 50% 0%, rgba(37,99,235,0.22), var(--surface) 72%);border:1px solid var(--line);border-radius:14px;padding:16px}
+.dials-row{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.dial-box{background:var(--surface-2);border:1px solid var(--line);border-radius:12px;padding:12px;text-align:center}
+.dial-num{font-family:var(--f-data);font-size:34px;font-weight:700;line-height:1.05;font-variant-numeric:tabular-nums}
+.dial-unit{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-top:2px}
+.warn-strip{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:12px}
+.wlamp{background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:8px 6px;text-align:center;font-family:var(--f-data);font-size:10px;font-weight:700;opacity:.38;transition:all .2s}
+.wlamp.on{opacity:1}
+.wlamp.red{background:var(--bad-bg);color:var(--bad);border-color:var(--bad);box-shadow:0 0 10px rgba(255,130,121,0.25)}
+.wlamp.amb{background:var(--warn-bg);color:var(--warn);border-color:var(--warn)}
+.wlamp.grn{background:var(--good-bg);color:var(--good);border-color:var(--good)}
 .gauge-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
 .gauge{background:var(--surface);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:10px;padding:12px}
 .gauge .gk{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
@@ -519,6 +531,9 @@ details.add>summary::-webkit-details-marker{display:none}
 
   <!-- TAB 6: ELM327 OBD2 LIVE TELEMETRY -->
   <section class="view" id="v-obd" hidden aria-label="OBD2 Live Telemetry"></section>
+
+  <!-- TAB 7: SPEEDOMETER & WARNING CLUSTER -->
+  <section class="view" id="v-cluster" hidden aria-label="Speedometer Cluster"></section>
   </main>
 </div>
 
@@ -568,6 +583,7 @@ details.add>summary::-webkit-details-marker{display:none}
   <button data-tab="trip"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>Trips</button>
   <button data-tab="snags"><svg viewBox="0 0 24 24"><path d="M12 3 2 20h20L12 3zM12 10v4M12 17v.5"/></svg>Repairs</button>
   <button data-tab="obd"><svg viewBox="0 0 24 24"><path d="M5 12.55a11 11 0 0 1 14.08 0M1.42 9a16 16 0 0 1 21.16 0M8.53 16.11a6 6 0 0 1 6.95 0M12 20h.01"/></svg>OBD2</button>
+  <button data-tab="cluster"><svg viewBox="0 0 24 24"><circle cx="12" cy="13" r="8"/><path d="M12 13l4-4M9 5h6"/></svg>Cluster</button>
   <button data-tab="service"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9 7 7M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/></svg>Service</button>
 </nav>
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
@@ -1770,6 +1786,7 @@ function go(tab){
   if(tab==="snags"){renderSnags()}
   if(tab==="service"){renderService()}
   if(tab==="obd"){renderObdPage()}
+  if(tab==="cluster"){renderClusterPage()}
   window.scrollTo(0,0);
 }
 
@@ -2103,14 +2120,16 @@ window.importFromPastedText = async function(){
 
 
 /* ==========================================================================
-   TAB 6: KINGBOLEN ELM327 BLUETOOTH OBD2 ENGINE (2006 BELTA 1KR-FE MODE 21)
+   TAB 6: KINGBOLEN ELM327 BLUETOOTH OBD2 ENGINE (2006 BELTA 1KR-FE VERIFIED)
    ========================================================================== */
 var OBD = {
   connected: false,
+  simMode: false,
   deviceAddr: lsGet("ctl_obd_addr") || "",
   devices: [],
   protocol: lsGet("ctl_obd_proto") || "ATSP6",
-  m21Variant: "DIRECT", // "DIRECT" (210C/2105/210B/210D) or "BLOCK2103" (6103/6104) or "MODE01"
+  m21Variant: "AUTO",
+  activePids: [],
   pollTimer: null,
   polling: false,
   rpm: 0,
@@ -2127,7 +2146,7 @@ var OBD = {
   avgKmL: null,
   kmLSamples: [],
   dtcs: [],
-  logs: ["Ready. Tap Connect ELM327 while ignition/engine is ON."],
+  logs: ["Ready. Tap 'Desk Simulator' to test at desk, or 'Connect ELM327' in car."],
   fullTrace: [],
   tripActive: false,
   tripStartDep: "",
@@ -2149,6 +2168,7 @@ window.obdDownloadTraceLog = async function(){
                "Date: " + new Date().toString() + "\n" +
                "Vehicle: 2006 Toyota Belta 1.0L (1KR-FE)\n" +
                "Protocol: " + OBD.protocol + " | Variant: " + OBD.m21Variant + "\n" +
+               "Active PIDs: " + OBD.activePids.join(",") + "\n" +
                "Device Address: " + (OBD.deviceAddr || "None") + "\n" +
                "Connected: " + OBD.connected + "\n" +
                "==========================================\n\n";
@@ -2170,6 +2190,39 @@ window.obdDownloadTraceLog = async function(){
   } catch(e) {
     toast("✅ OBD Log copied to clipboard!");
   }
+};
+
+window.obdStartSimulator = function(){
+  obdDisconnect();
+  OBD.connected = true;
+  OBD.simMode = true;
+  OBD.m21Variant = "SIM-1KRFE";
+  OBD.volt = 13.8;
+  OBD.rpm = 740;
+  OBD.speed = 0;
+  OBD.coolant = 86;
+  OBD.mapKpa = 32;
+  OBD.iat = 31;
+  OBD.stft = "-1.6";
+  obdLog("🧪 Desk Simulator started (2006 Belta 1KR-FE live profile).");
+  if(OBD.pollTimer) clearInterval(OBD.pollTimer);
+  OBD.pollTimer = setInterval(function(){
+    if(!OBD.simMode) return;
+    OBD.rpm = 720 + Math.round(Math.random() * 45);
+    OBD.speed = OBD.tripActive ? (42 + Math.round(Math.random() * 14)) : 0;
+    OBD.coolant = 87;
+    OBD.mapKpa = OBD.tripActive ? 48 : 32;
+    OBD.stft = (-1.5 + (Math.random() * 1.2)).toFixed(1);
+    computeBeltaFuelEconomy();
+    var now = Date.now();
+    if(OBD.tripActive && OBD.tripLastTick){
+      OBD.tripDistKm += (OBD.speed * ((now - OBD.tripLastTick) / 3600000.0));
+    }
+    OBD.tripLastTick = now;
+    if(S.tab === "obd") updateObdLiveDom();
+  }, 1000);
+  renderObdPage();
+  toast("🧪 Desk Simulator Active");
 };
 
 window.obdRefreshDevices = function(){
@@ -2208,17 +2261,28 @@ function extractPidBytes(resp, expectedMode, expectedPid){
   return out;
 }
 
-// Parse Toyota Mode 2103 multi-sensor block if returned (length >= 8 bytes)
-function parseToyotaBlock2103(resp){
-  var b = extractPidBytes(resp, "61", "03");
-  if(!b || b.length < 7) return false;
-  // Toyota JDM 2103 layout: b[2]=Coolant(A-40), b[3]=IAT(B-40), b[4]=MAP(C kPa), b[5..6]=RPM((D*256+E)/4), b[7]=Speed
-  if(b.length > 2) OBD.coolant = b[2] - 40;
-  if(b.length > 3) OBD.iat = b[3] - 40;
-  if(b.length > 4) OBD.mapKpa = b[4];
-  if(b.length > 6) OBD.rpm = Math.round(((b[5] * 256) + b[6]) / 4);
-  if(b.length > 7) OBD.speed = b[7];
-  return true;
+function parseToyotaBlock(pidHex, resp){
+  var b = extractPidBytes(resp, "61", pidHex);
+  if(!b || b.length < 4) return false;
+  if(pidHex === "03" && b.length >= 6){
+    OBD.coolant = b[2] - 40;
+    if(b.length > 3) OBD.iat = b[3] - 40;
+    if(b.length > 4) OBD.mapKpa = b[4];
+    if(b.length > 6) OBD.rpm = Math.round(((b[5] * 256) + b[6]) / 4);
+    if(b.length > 7) OBD.speed = b[7];
+    return true;
+  }
+  if(pidHex === "02" && b.length >= 6){
+    if(b.length > 3) OBD.coolant = b[3] - 40;
+    if(b.length > 5) OBD.rpm = Math.round(((b[4] * 256) + b[5]) / 4);
+    if(b.length > 6) OBD.speed = b[6];
+    return true;
+  }
+  if(pidHex === "04" && b.length >= 4){
+    OBD.stft = ((b[3] - 128) * 100.0 / 128.0).toFixed(1);
+    return true;
+  }
+  return false;
 }
 
 function decodeDtcWord(b1, b2){
@@ -2253,6 +2317,7 @@ window.obdConnect = async function(silentAuto){
   }
 
   if(OBD.pollTimer){ clearInterval(OBD.pollTimer); OBD.pollTimer = null; }
+  OBD.simMode = false;
   OBD.polling = true;
   OBD.deviceAddr = addr;
   lsSet("ctl_obd_addr", addr);
@@ -2269,6 +2334,7 @@ window.obdConnect = async function(silentAuto){
     }
 
     OBD.connected = true;
+    OBD.activePids = [];
     renderObdPage();
 
     var initCmds = [
@@ -2287,30 +2353,36 @@ window.obdConnect = async function(silentAuto){
       obdLog(initCmds[i][0] + " => " + (r || "OK"));
     }
 
-    // Discovery probe across Toyota Mode 21 PIDs to auto-lock exact 2006 Belta PID map!
-    var probeList = ["2101", "2102", "2103", "2104", "2105", "2106", "210B", "210C", "210D", "210F", "2110", "2120"];
+    var probeList = ["2102", "2103", "2104", "2105", "2106", "210B", "210C", "210D", "210F", "2110", "2120"];
     var probeResults = {};
     for(var p=0; p<probeList.length; p++){
       var cmd = probeList[p];
-      var resp = window.AndroidOBD.sendCommand(cmd, 500);
+      var resp = window.AndroidOBD.sendCommand(cmd, 450);
       probeResults[cmd] = resp;
       obdLog("PID " + cmd + " => " + (resp || "EMPTY"));
+      if(resp && resp.toUpperCase().indexOf("61" + cmd.slice(2)) !== -1){
+        OBD.activePids.push(cmd);
+      }
     }
 
-    // Determine exact PID variant supported by this 2006 Belta ECU
     var b210C = extractPidBytes(probeResults["210C"], "61", "0C");
     var b2103 = extractPidBytes(probeResults["2103"], "61", "03");
+    var b2102 = extractPidBytes(probeResults["2102"], "61", "02");
+
     if(b210C && b210C.length >= 4){
       OBD.m21Variant = "DIRECT";
       OBD.rpm = Math.round(((b210C[2] * 256) + b210C[3]) / 4);
-      obdLog("✅ Locked Toyota Mode 21 Direct PIDs (210C/2105/210B)!");
-    } else if(b2103 && b2103.length >= 7){
+      obdLog("✅ Locked Mode 21 Direct PIDs!");
+    } else if(b2103 && b2103.length >= 6){
       OBD.m21Variant = "BLOCK2103";
-      parseToyotaBlock2103(probeResults["2103"]);
-      obdLog("✅ Locked Toyota Mode 2103 Multi-Block!");
+      parseToyotaBlock("03", probeResults["2103"]);
+      obdLog("✅ Locked Mode 2103 Data Block!");
+    } else if(b2102 && b2102.length >= 6){
+      OBD.m21Variant = "BLOCK2102";
+      parseToyotaBlock("02", probeResults["2102"]);
+      obdLog("✅ Locked Mode 2102 Data Block!");
     } else {
-      OBD.m21Variant = "SCAN_21";
-      obdLog("Scanning extended Mode 21 PIDs...");
+      OBD.m21Variant = "DIRECT";
     }
 
     var vResp = window.AndroidOBD.sendCommand("ATRV", 500);
@@ -2332,10 +2404,194 @@ window.obdDisconnect = function(){
   if(OBD.pollTimer){ clearInterval(OBD.pollTimer); OBD.pollTimer = null; }
   OBD.polling = false;
   OBD.connected = false;
+  OBD.simMode = false;
   if(window.AndroidOBD) window.AndroidOBD.disconnect();
   obdLog("Disconnected cleanly.");
   if(S.tab === "obd") renderObdPage();
 };
+
+
+/* ==========================================================================
+   1KR-FE COIL MISFIRE, FUEL TRIM HEALTH & SPEEDOMETER CLUSTER ENGINE
+   ========================================================================== */
+var CLUSTER_CFG = {
+  speedLimit: parseFloat(lsGet("ctl_spd_lim") || "100") || 100,
+  tempLimit: parseFloat(lsGet("ctl_tmp_lim") || "98") || 98
+};
+
+function evaluateBeltaHealth(){
+  var stftVal = OBD.stft != null ? parseFloat(OBD.stft) : null;
+  var rpm = OBD.rpm || 0;
+  var speed = OBD.speed || 0;
+  var coolant = OBD.coolant;
+  var volt = OBD.volt;
+
+  var misfireLevel = "OK";
+  var misfireTitle = "1KR-FE Ignition & Fuel Trim Normal";
+  var misfireDetail = "STFT within healthy ±5% band; no erratic RPM drop detected.";
+
+  if(stftVal != null && Math.abs(stftVal) >= 12){
+    misfireLevel = "ALERT";
+    misfireTitle = "⚠️ High Fuel Trim / Possible Coil Misfire (" + (stftVal > 0 ? "+" : "") + stftVal + "%)";
+    misfireDetail = "Unburned oxygen detected in exhaust or fuel delivery anomaly. Inspect ignition coils/plugs & MAP vacuum.";
+  } else if(stftVal != null && Math.abs(stftVal) >= 6){
+    misfireLevel = "WARN";
+    misfireTitle = "⚡ Weak Coil / Trim Drift Watch (" + (stftVal > 0 ? "+" : "") + stftVal + "%)";
+    misfireDetail = "Monitor idle stability & check ignition coil boots / spark plugs on 1KR-FE.";
+  } else if(rpm > 0 && speed === 0 && (rpm < 580 || rpm > 1150)){
+    misfireLevel = "WARN";
+    misfireTitle = "⚡ Idle RPM Anomaly (" + rpm + " RPM)";
+    misfireDetail = "Idle RPM outside normal 650–950 RPM window; check throttle body, vacuum, or coil.";
+  }
+
+  var speedAlert = (speed > 0 && speed >= CLUSTER_CFG.speedLimit);
+  var tempAlert = (coolant != null && coolant >= CLUSTER_CFG.tempLimit);
+  var battLow = (volt != null && volt > 0 && volt < 12.2);
+  var battHigh = (volt != null && volt > 14.8);
+  var dtcAlert = (OBD.dtcs && OBD.dtcs.length > 0);
+
+  var alerts = [];
+  if(speedAlert) alerts.push({ type: "warn", text: "🚨 SPEED LIMIT ALERT: " + speed + " km/h (Limit: " + CLUSTER_CFG.speedLimit + " km/h)" });
+  if(tempAlert) alerts.push({ type: "bad", text: "🌡️ OVERHEAT ALERT: Coolant at " + coolant + "°C (Threshold: " + CLUSTER_CFG.tempLimit + "°C)" });
+  if(misfireLevel === "ALERT") alerts.push({ type: "bad", text: misfireTitle + " — " + misfireDetail });
+  else if(misfireLevel === "WARN") alerts.push({ type: "warn", text: misfireTitle });
+  if(battLow) alerts.push({ type: "warn", text: "🔋 Low Voltage Alert: " + volt.toFixed(1) + "V (Check battery / charging)" });
+  if(battHigh) alerts.push({ type: "bad", text: "⚡ High Charging Voltage: " + volt.toFixed(1) + "V (Check alternator regulator)" });
+  if(dtcAlert) alerts.push({ type: "bad", text: "🛑 ECU Fault Code Active: " + OBD.dtcs.join(", ") });
+
+  return {
+    misfireLevel: misfireLevel,
+    misfireTitle: misfireTitle,
+    misfireDetail: misfireDetail,
+    speedAlert: speedAlert,
+    tempAlert: tempAlert,
+    battLow: battLow,
+    battHigh: battHigh,
+    dtcAlert: dtcAlert,
+    alerts: alerts
+  };
+}
+
+window.updateClusterThresholds = function(){
+  var sp = num($("#cl-spd-lim") ? $("#cl-spd-lim").value : CLUSTER_CFG.speedLimit);
+  var tm = num($("#cl-tmp-lim") ? $("#cl-tmp-lim").value : CLUSTER_CFG.tempLimit);
+  if(sp && sp >= 20 && sp <= 240){
+    CLUSTER_CFG.speedLimit = sp;
+    lsSet("ctl_spd_lim", String(sp));
+  }
+  if(tm && tm >= 75 && tm <= 125){
+    CLUSTER_CFG.tempLimit = tm;
+    lsSet("ctl_tmp_lim", String(tm));
+  }
+  if(S.tab === "cluster") renderClusterPage();
+  toast("Cluster alerts updated (" + CLUSTER_CFG.speedLimit + " km/h, " + CLUSTER_CFG.tempLimit + "°C)");
+};
+
+function syncClusterLiveDom(){
+  if(S.tab !== "cluster") return;
+  var h = evaluateBeltaHealth();
+  var elSpd = $("#cl-spd"), elRpm = $("#cl-rpm"), elTmp = $("#cl-tmp"), elAvg = $("#cl-avg"), elVlt = $("#cl-vlt");
+  if(elSpd){
+    elSpd.textContent = OBD.speed || 0;
+    elSpd.style.color = h.speedAlert ? "var(--bad)" : "var(--ink)";
+  }
+  if(elRpm){
+    elRpm.textContent = OBD.rpm || 0;
+    elRpm.style.color = (OBD.rpm > 5500) ? "var(--bad)" : "var(--ink)";
+  }
+  if(elTmp){
+    elTmp.textContent = OBD.coolant != null ? (OBD.coolant + "°C") : "--";
+    elTmp.style.color = h.tempAlert ? "var(--bad)" : "var(--ink)";
+  }
+  if(elAvg) elAvg.textContent = OBD.avgKmL != null ? OBD.avgKmL.toFixed(1) : "--";
+  if(elVlt) elVlt.textContent = OBD.volt != null ? (OBD.volt.toFixed(1) + "V") : "--";
+
+  var lSpd = $("#wl-spd"), lTmp = $("#wl-tmp"), lMis = $("#wl-mis"), lCel = $("#wl-cel"), lBat = $("#wl-bat"), lConn = $("#wl-conn");
+  if(lSpd) lSpd.className = "wlamp amb" + (h.speedAlert ? " on" : "");
+  if(lTmp) lTmp.className = "wlamp red" + (h.tempAlert ? " on" : "");
+  if(lMis) lMis.className = "wlamp " + (h.misfireLevel === "ALERT" ? "red on" : (h.misfireLevel === "WARN" ? "amb on" : "amb"));
+  if(lCel) lCel.className = "wlamp amb" + (h.dtcAlert ? " on" : "");
+  if(lBat) lBat.className = "wlamp red" + ((h.battLow || h.battHigh) ? " on" : "");
+  if(lConn) lConn.className = "wlamp grn" + (OBD.connected ? " on" : "");
+}
+
+function renderClusterPage(){
+  var el = $("#v-cluster");
+  if(!el) return;
+  var h = evaluateBeltaHealth();
+  var rpmPct = Math.min(100, Math.max(0, Math.round(((OBD.rpm || 0) / 7000) * 100)));
+  var spdPct = Math.min(100, Math.max(0, Math.round(((OBD.speed || 0) / 180) * 100)));
+
+  var out = '<div class="cluster-hero">' +
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">' +
+      '<div><div class="lbl" style="font-size:11px;letter-spacing:.1em;color:var(--muted)">2006 TOYOTA BELTA • 1KR-FE CLUSTER</div>' +
+      '<div style="font-family:var(--f-display);font-size:22px;font-weight:700">' + (OBD.connected ? (OBD.simMode ? 'SIMULATOR LIVE' : 'ECU STREAM ACTIVE') : 'CLUSTER STANDBY') + '</div></div>' +
+      '<div style="text-align:right;font-family:var(--f-data)"><b id="cl-vlt" style="font-size:16px">' + (OBD.volt ? OBD.volt.toFixed(1) + 'V' : '--') + '</b><div style="font-size:10px;color:var(--muted)">Limit ' + CLUSTER_CFG.speedLimit + ' km/h</div></div>' +
+    '</div>' +
+
+    '<div class="dials-row">' +
+      '<div class="dial-box">' +
+        '<div class="dial-unit">Vehicle Speed</div>' +
+        '<div class="dial-num" id="cl-spd" style="color:' + (h.speedAlert ? 'var(--bad)' : 'var(--ink)') + '">' + (OBD.speed || 0) + '</div>' +
+        '<div class="dial-unit">km/h</div>' +
+        '<div class="prog-track"><div class="prog-fill ' + (h.speedAlert ? 'bad' : 'good') + '" style="width:' + spdPct + '%"></div></div>' +
+      '</div>' +
+      '<div class="dial-box">' +
+        '<div class="dial-unit">Engine Tachometer</div>' +
+        '<div class="dial-num" id="cl-rpm">' + (OBD.rpm || 0) + '</div>' +
+        '<div class="dial-unit">RPM</div>' +
+        '<div class="prog-track"><div class="prog-fill ' + ((OBD.rpm||0)>5500 ? 'bad' : 'good') + '" style="width:' + rpmPct + '%"></div></div>' +
+      '</div>' +
+    '</div>' +
+
+    '<div class="dials-row" style="margin-top:10px">' +
+      '<div class="dial-box" style="padding:10px">' +
+        '<div class="dial-unit">Coolant Temp</div>' +
+        '<div class="dial-num" id="cl-tmp" style="font-size:24px;color:' + (h.tempAlert ? 'var(--bad)' : 'var(--ink)') + '">' + (OBD.coolant != null ? (OBD.coolant + '°C') : '--') + '</div>' +
+        '<div class="dial-unit">Alert ≥ ' + CLUSTER_CFG.tempLimit + '°C</div>' +
+      '</div>' +
+      '<div class="dial-box" style="padding:10px">' +
+        '<div class="dial-unit">Live Economy</div>' +
+        '<div class="dial-num" id="cl-avg" style="font-size:24px;color:var(--good)">' + (OBD.avgKmL != null ? OBD.avgKmL.toFixed(1) : '--') + '</div>' +
+        '<div class="dial-unit">km/L (MAP)</div>' +
+      '</div>' +
+    '</div>' +
+
+    '<div class="warn-strip">' +
+      '<div id="wl-spd" class="wlamp amb' + (h.speedAlert ? ' on' : '') + '">SPEED<br>ALERT</div>' +
+      '<div id="wl-tmp" class="wlamp red' + (h.tempAlert ? ' on' : '') + '">TEMP<br>HIGH</div>' +
+      '<div id="wl-mis" class="wlamp ' + (h.misfireLevel === 'ALERT' ? 'red on' : (h.misfireLevel === 'WARN' ? 'amb on' : 'amb')) + '">COIL /<br>MISFIRE</div>' +
+      '<div id="wl-cel" class="wlamp amb' + (h.dtcAlert ? ' on' : '') + '">CHECK<br>ENGINE</div>' +
+      '<div id="wl-bat" class="wlamp red' + ((h.battLow || h.battHigh) ? ' on' : '') + '">BATTERY<br>VOLT</div>' +
+      '<div id="wl-conn" class="wlamp grn' + (OBD.connected ? ' on' : '') + '">ECU<br>LINK</div>' +
+      '<div class="wlamp amb">STFT<br>' + (OBD.stft != null ? OBD.stft + '%' : '--') + '</div>' +
+      '<div class="wlamp grn' + (OBD.tripActive ? ' on' : '') + '">TRIP<br>REC</div>' +
+    '</div>' +
+  '</div>';
+
+  out += '<div><h2>Active Cluster & Misfire Alerts</h2><div class="list">';
+  if(h.alerts.length){
+    out += h.alerts.map(function(a){
+      return '<div class="alert ' + a.type + '">' + a.text + '</div>';
+    }).join("");
+  } else {
+    out += '<div class="alert good">✅ All cluster warnings clear — Speed, Temperature, Voltage & 1KR-FE Fuel Trim normal.</div>';
+  }
+  out += '</div></div>';
+
+  out += '<div><h2>Cluster Alert Thresholds</h2><div class="card form">' +
+    '<div class="grid2">' +
+      '<label class="fld"><span>Speed Alert (km/h)</span><input type="number" id="cl-spd-lim" value="' + CLUSTER_CFG.speedLimit + '" min="20" max="240"></label>' +
+      '<label class="fld"><span>Coolant Overheat Alert (°C)</span><input type="number" id="cl-tmp-lim" value="' + CLUSTER_CFG.tempLimit + '" min="75" max="125"></label>' +
+    '</div>' +
+    '<div class="btns">' +
+      '<button class="btn small primary" type="button" onclick="updateClusterThresholds()">Save Alert Limits</button>' +
+      (!OBD.connected ? '<button class="btn small" type="button" onclick="go(\'obd\');obdStartSimulator()">🧪 Start Desk Sim</button>' : '') +
+    '</div>' +
+  '</div></div>';
+
+  el.innerHTML = out;
+}
 
 function computeBeltaFuelEconomy(){
   if(OBD.rpm > 0 && OBD.mapKpa > 0){
@@ -2357,7 +2613,7 @@ function computeBeltaFuelEconomy(){
 }
 
 function obdPollTick(){
-  if(!OBD.connected || OBD.polling || !window.AndroidOBD) return;
+  if(!OBD.connected || OBD.simMode || OBD.polling || !window.AndroidOBD) return;
   if(!window.AndroidOBD.isConnected()){
     obdLog("Bluetooth socket closed.");
     obdDisconnect();
@@ -2366,13 +2622,11 @@ function obdPollTick(){
   OBD.polling = true;
   try {
     if(OBD.m21Variant === "BLOCK2103"){
-      parseToyotaBlock2103(window.AndroidOBD.sendCommand("2103", 450));
-      var b2104 = extractPidBytes(window.AndroidOBD.sendCommand("2104", 450), "61", "04");
-      if(b2104 && b2104.length >= 4){
-        OBD.stft = ((b2104[3] - 128) * 100.0 / 128.0).toFixed(1);
-      }
+      parseToyotaBlock("03", window.AndroidOBD.sendCommand("2103", 450));
+      parseToyotaBlock("04", window.AndroidOBD.sendCommand("2104", 450));
+    } else if(OBD.m21Variant === "BLOCK2102"){
+      parseToyotaBlock("02", window.AndroidOBD.sendCommand("2102", 450));
     } else {
-      // Toyota Enhanced Mode 21 Direct PIDs (mirrors SAE PIDs under service 0x21)
       var bRpm = extractPidBytes(window.AndroidOBD.sendCommand("210C", 350), "61", "0C");
       if(bRpm && bRpm.length >= 4) OBD.rpm = Math.round(((bRpm[2] * 256) + bRpm[3]) / 4);
 
@@ -2410,7 +2664,7 @@ function obdPollTick(){
 }
 
 function obdScanDtcsInternal(){
-  if(!OBD.connected || !window.AndroidOBD) return;
+  if(!OBD.connected || OBD.simMode || !window.AndroidOBD) return;
   obdLog("Scanning ECU Fault Codes (Toyota Mode 13 & 07)...");
   var found = [];
   [["13", "53"], ["07", "47"], ["03", "43"]].forEach(function(pair){
@@ -2434,7 +2688,13 @@ function obdScanDtcsInternal(){
 }
 
 window.obdScanDtcs = function(){
-  if(!OBD.connected || !window.AndroidOBD){ toast("Connect ELM327 first"); return; }
+  if(!OBD.connected){ toast("Connect ELM327 or Start Simulator first"); return; }
+  if(OBD.simMode){
+    OBD.dtcs = ["P0351"];
+    renderObdPage();
+    toast("🧪 Simulated DTC P0351 detected");
+    return;
+  }
   OBD.polling = true;
   try {
     obdScanDtcsInternal();
@@ -2446,17 +2706,19 @@ window.obdScanDtcs = function(){
 };
 
 window.obdClearDtcs = function(){
-  if(!OBD.connected || !window.AndroidOBD) return;
+  if(!OBD.connected) return;
   if(!confirm("Clear Check Engine Light & ECU Fault Codes (Mode 14 / 04)?")) return;
-  OBD.polling = true;
-  try {
-    var r1 = window.AndroidOBD.sendCommand("14", 900);
-    var r2 = window.AndroidOBD.sendCommand("04", 900);
-    obdLog("Clear Codes (14/04) => " + r1 + " / " + r2);
-    OBD.dtcs = [];
-  } finally {
-    OBD.polling = false;
+  if(!OBD.simMode && window.AndroidOBD){
+    OBD.polling = true;
+    try {
+      var r1 = window.AndroidOBD.sendCommand("14", 900);
+      var r2 = window.AndroidOBD.sendCommand("04", 900);
+      obdLog("Clear Codes (14/04) => " + r1 + " / " + r2);
+    } finally {
+      OBD.polling = false;
+    }
   }
+  OBD.dtcs = [];
   renderObdPage();
   toast("ECU fault codes cleared");
 };
@@ -2542,6 +2804,7 @@ function updateObdLiveDom(){
   if(elMap) elMap.textContent = OBD.mapKpa != null ? (OBD.mapKpa + " kPa") : "--";
   if(elStft) elStft.textContent = OBD.stft != null ? (OBD.stft + "%") : "--";
   if(elDist) elDist.textContent = OBD.tripDistKm.toFixed(2) + " km";
+  syncClusterLiveDom();
 }
 
 function renderObdPage(){
@@ -2556,7 +2819,7 @@ function renderObdPage(){
   }
 
   var h = '<div class="band ' + (OBD.connected ? 'ok' : 'range') + '">'+
-    '<div><div class="lbl">Kingbolen ELM327 Telemetry</div><div class="big">' + (OBD.connected ? 'ECU ONLINE' : 'STANDBY') + '</div></div>'+
+    '<div><div class="lbl">Kingbolen ELM327 Telemetry</div><div class="big">' + (OBD.connected ? (OBD.simMode ? 'SIMULATOR' : 'ECU ONLINE') : 'STANDBY') + '</div></div>'+
     '<div class="odo"><b>' + (OBD.volt ? OBD.volt.toFixed(1) + ' V' : '12V OBDII') + '</b><span>Mode 21 (' + esc(OBD.m21Variant) + ')</span></div>'+
   '</div>';
 
@@ -2576,7 +2839,8 @@ function renderObdPage(){
     '<div class="btns">'+
       '<button class="btn small" type="button" onclick="obdRefreshDevices()">🔄 Scan Paired</button>'+
       (!OBD.connected ?
-        '<button class="btn small primary" type="button" onclick="obdConnect(false)">⚡ Connect ELM327</button>' :
+        '<button class="btn small primary" type="button" onclick="obdConnect(false)">⚡ Connect ELM327</button>' +
+        '<button class="btn small" type="button" onclick="obdStartSimulator()">🧪 Desk Simulator</button>' :
         '<button class="btn small danger" type="button" onclick="obdDisconnect()">✕ Disconnect</button>')+
     '</div>'+
   '</div>';
@@ -2589,6 +2853,13 @@ function renderObdPage(){
     '<div class="gauge"><div class="gk">Intake MAP</div><div class="gv" id="og-map">'+(OBD.mapKpa!=null?OBD.mapKpa+' kPa':'--')+'</div><div class="gs">Idle ~30–35 kPa</div></div>'+
     '<div class="gauge"><div class="gk">Short Fuel Trim</div><div class="gv" id="og-stft">'+(OBD.stft!=null?OBD.stft+'%':'--')+'</div><div class="gs">Healthy -5% to +5%</div></div>'+
   '</div>';
+  var _bh = evaluateBeltaHealth();
+  if(_bh.misfireLevel !== "OK"){
+    h += '<div class="alert ' + (_bh.misfireLevel === "ALERT" ? "bad" : "warn") + '"><div><b>' + esc(_bh.misfireTitle) + '</b><div style="font-size:12px">' + esc(_bh.misfireDetail) + '</div></div></div>';
+  } else if(OBD.stft != null){
+    h += '<div class="alert good"><div><b>' + esc(_bh.misfireTitle) + '</b><div style="font-size:12px">' + esc(_bh.misfireDetail) + '</div></div></div>';
+  }
+
 
   h += '<div class="card form" style="border-left:4px solid var(--good)">'+
     '<div style="display:flex;justify-content:space-between;align-items:center">'+
@@ -2614,7 +2885,7 @@ function renderObdPage(){
     h += '<div class="list">' + OBD.dtcs.map(function(code){
       return '<div class="alert bad" style="justify-content:space-between">'+
         '<span><b>'+esc(code)+'</b> — Active / Pending Engine Fault</span>'+
-        '<button class="btn small primary" type="button" onclick="obdLogDtcToRepairs(\''+esc(code)+'\')">+ Auto-Add to Repairs</button>'+
+        '<button class="btn small primary" type="button" data-dtc="'+esc(code)+'" onclick="obdLogDtcToRepairs(this.dataset.dtc)">+ Auto-Add to Repairs</button>'+
       '</div>';
     }).join("") + '</div>';
   } else {
